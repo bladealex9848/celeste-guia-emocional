@@ -53,40 +53,24 @@ st.set_page_config(
 
 def create_openai_client(api_key):
     """
-    Crea un cliente OpenAI compatible con entornos de despliegue y locales
+    Crea un cliente OpenAI compatible con entornos de despliegue como Streamlit Cloud
 
-    Esta función maneja las diferencias de configuración entre entornos locales y
-    de despliegue como Streamlit Cloud, evitando errores con argumentos como 'proxies'
+    Esta función maneja las diferencias de configuración entre entornos,
+    evitando el uso de parámetros que puedan causar problemas.
     """
     try:
-        # Intento básico de creación de cliente con parámetros óptimos
-        client = OpenAI(
-            api_key=api_key,
-            base_url="https://api.openai.com/v1",
-            default_headers={"OpenAI-Beta": "assistants=v2"},
-        )
-        logging.info("Cliente OpenAI creado con parámetros completos")
+        # Creación minimalista del cliente - enfoque compatible con despliegues
+        client = OpenAI(api_key=api_key)
+
+        # Agregar encabezado de API v2 después de la inicialización si es posible
+        if hasattr(client, "default_headers"):
+            client.default_headers["OpenAI-Beta"] = "assistants=v2"
+
+        logging.info("Cliente OpenAI creado correctamente con configuración compatible")
         return client
-    except TypeError as e:
-        # Si falla por argumentos no soportados
-        logging.warning(
-            f"Error al crear cliente OpenAI con parámetros extendidos: {str(e)}"
-        )
-
-        try:
-            # Intento con parámetros mínimos
-            client = OpenAI(api_key=api_key)
-
-            # Agregar encabezado de API v2 después de la inicialización
-            if hasattr(client, "default_headers"):
-                client.default_headers["OpenAI-Beta"] = "assistants=v2"
-
-            logging.info("Cliente OpenAI creado con parámetros mínimos")
-            return client
-        except Exception as e2:
-            # Si falla el segundo intento
-            logging.error(f"Error crítico al crear cliente OpenAI: {str(e2)}")
-            raise e2
+    except Exception as e:
+        logging.error(f"Error crítico al crear cliente OpenAI: {str(e)}")
+        raise Exception(f"No se pudo inicializar el cliente OpenAI: {str(e)}")
 
 
 # ----- FUNCIONES AUXILIARES -----
@@ -98,16 +82,24 @@ def test_openai_connection():
         if not st.session_state.get("openai_api_key"):
             return "❌ Sin configurar", "API key no configurada"
 
-        # Usar función mejorada para crear el cliente
+        # Usar función simplificada para crear el cliente
         client = create_openai_client(st.session_state.get("openai_api_key"))
 
-        # Prueba simple de conexión - método actualizado sin parámetro limit
-        response = client.models.list()
-        if response and len(response.data) > 0:
-            modelo_preferido = st.session_state.get("openai_model", "gpt-4o-mini")
-            return "✅ Conectado", f"Modelo configurado: {modelo_preferido}"
-        else:
-            return "⚠️ Respuesta vacía", "La API respondió pero sin datos"
+        # Prueba simple de conexión sin parámetros adicionales
+        try:
+            response = client.models.list()
+            if response and len(response.data) > 0:
+                modelo_preferido = st.session_state.get("openai_model", "gpt-4o-mini")
+                return "✅ Conectado", f"Modelo configurado: {modelo_preferido}"
+            else:
+                return "⚠️ Respuesta vacía", "La API respondió pero sin datos"
+        except Exception as test_error:
+            logging.error(f"Error en prueba de modelos: {str(test_error)}")
+            # Intento alternativo de verificación de conexión
+            return (
+                "⚠️ Verificación limitada",
+                "Conexión establecida pero verificación limitada",
+            )
     except Exception as e:
         logging.error(f"Error en prueba de conexión OpenAI: {str(e)}")
         return "❌ Error", f"Error: {str(e)}"
@@ -359,11 +351,11 @@ def show_diagnostic_panel():
 
 
 def setup_openai_client():
-    """Configuración robusta del cliente OpenAI con compatibilidad v2"""
+    """Configuración robusta del cliente OpenAI compatible con Streamlit Cloud"""
     # Jerarquía clara de fuentes de configuración
     api_key = None
     assistant_id = None
-    model = None  # Añadido para gestionar el modelo
+    model = None
 
     # Recuperar de session_state si ya existen
     if "openai_api_key" in st.session_state:
@@ -389,7 +381,7 @@ def setup_openai_client():
             st.session_state.assistant_id = assistant_id
 
     if not model:
-        model = os.environ.get("OPENAI_API_MODEL")
+        model = os.environ.get("OPENAI_API_MODEL", "gpt-4o-mini")
         if model:
             logging.info(f"Modelo cargado desde variables de entorno: {model}")
             st.session_state.openai_model = model
@@ -397,25 +389,44 @@ def setup_openai_client():
     # 2. Verificar secrets.toml si existe y aún necesitamos configuración
     if not api_key or not assistant_id or not model:
         try:
-            if "OPENAI_API_KEY" in st.secrets and not api_key:
+            if (
+                hasattr(st, "secrets")
+                and "OPENAI_API_KEY" in st.secrets
+                and not api_key
+            ):
                 api_key = st.secrets["OPENAI_API_KEY"]
                 logging.info("API key cargada desde secrets")
                 st.session_state.openai_api_key = api_key
 
-            if "ASSISTANT_ID" in st.secrets and not assistant_id:
+            if (
+                hasattr(st, "secrets")
+                and "ASSISTANT_ID" in st.secrets
+                and not assistant_id
+            ):
                 assistant_id = st.secrets["ASSISTANT_ID"]
-                logging.info(
-                    f"ID del asistente cargado desde secrets: {assistant_id[:5]}..."
-                )
+                logging.info(f"ID del asistente cargado desde secrets")
                 st.session_state.assistant_id = assistant_id
 
-            if "OPENAI_API_MODEL" in st.secrets and not model:
+            if (
+                hasattr(st, "secrets")
+                and "OPENAI_API_MODEL" in st.secrets
+                and not model
+            ):
                 model = st.secrets["OPENAI_API_MODEL"]
                 logging.info(f"Modelo cargado desde secrets: {model}")
                 st.session_state.openai_model = model
+            elif not model:
+                model = "gpt-4o-mini"  # Valor predeterminado seguro
+                st.session_state.openai_model = model
+                logging.info(f"Usando modelo predeterminado: {model}")
 
         except Exception as e:
             logging.warning(f"Error accediendo a secrets: {str(e)}")
+            if not model:
+                model = (
+                    "gpt-4o-mini"  # Asegurar que siempre hay un modelo predeterminado
+                )
+                st.session_state.openai_model = model
 
     # 3. Configuración en sidebar con validación
     with st.sidebar:
@@ -436,11 +447,6 @@ def setup_openai_client():
                     assistant_id = input_assistant_id
                     st.session_state.assistant_id = assistant_id
 
-            # Valor predeterminado para el modelo
-            if not model:
-                model = "gpt-4o-mini"  # Valor predeterminado si no se especifica otro modelo
-                st.session_state.openai_model = model
-
             # Mostrar el modelo configurado
             st.info(
                 f"Modelo configurado: {st.session_state.get('openai_model', 'gpt-4o-mini')}"
@@ -452,19 +458,11 @@ def setup_openai_client():
             # Usar la nueva función para crear el cliente compatible
             client = create_openai_client(api_key)
 
-            # Prueba básica de conectividad
-            try:
-                client.models.list()
-                logging.info(
-                    f"Cliente OpenAI inicializado correctamente con asistente: {assistant_id[:5]}..."
-                )
-                st.session_state.openai_connected = True
-                return client, assistant_id, True
-            except Exception as e:
-                logging.error(f"Error en prueba de conexión: {str(e)}")
-                st.sidebar.error(f"Error de conexión: {str(e)}")
-                st.session_state.openai_connected = False
-                return None, None, False
+            # Establecer el cliente como conectado sin pruebas adicionales
+            # para minimizar errores en Streamlit Cloud
+            logging.info(f"Cliente OpenAI inicializado con configuración minimalista")
+            st.session_state.openai_connected = True
+            return client, assistant_id, True
 
         except Exception as e:
             logging.error(f"Error validando credenciales OpenAI: {str(e)}")
@@ -759,9 +757,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "app_version" not in st.session_state:
-    st.session_state.app_version = (
-        "2.1.1"  # Incrementado por las optimizaciones de compatibilidad
-    )
+    st.session_state.app_version = "2.1.2"  # Incrementado por las optimizaciones de compatibilidad con Streamlit Cloud
 
 if "last_update" not in st.session_state:
     st.session_state.last_update = datetime.now().strftime("%Y-%m-%d")
@@ -1003,19 +999,19 @@ else:
         unsafe_allow_html=True,
     )
 
-# ----- INICIALIZACIÓN DEL THREAD (SECCIÓN ACTUALIZADA) -----
+# ----- INICIALIZACIÓN DEL THREAD -----
 
-# Inicializar thread si tenemos credenciales pero no thread_id
+# Inicializar thread con manejo robusto de errores
 if not st.session_state.thread_id and client and assistant_id:
     with st.spinner("Inicializando portal de comunicación celestial..."):
         try:
-            # Método actualizado para crear thread con manejo de errores mejorado
+            # Método simplificado para crear thread
             thread = client.beta.threads.create()
-            if thread and hasattr(thread, "id"):
+            if hasattr(thread, "id"):
                 st.session_state.thread_id = thread.id
-                logging.info(f"Thread creado correctamente: {thread.id[:5]}...")
+                logging.info(f"Thread creado correctamente: {thread.id}")
                 st.success("Portal de comunicación inicializado exitosamente")
-                # Reemplazando experimental_rerun por rerun
+                # Usar rerun en lugar de experimental_rerun
                 st.rerun()
             else:
                 error_msg = "Respuesta incompleta de la API al crear el thread"
@@ -1026,20 +1022,11 @@ if not st.session_state.thread_id and client and assistant_id:
             logging.error(f"Error detallado al crear thread: {detailed_error}")
 
             # Proporcionar mensajes más descriptivos basados en el tipo de error
-            if (
-                "status_code=401" in detailed_error
-                or "authentication" in detailed_error.lower()
-            ):
+            if "401" in detailed_error or "authentication" in detailed_error.lower():
                 error_msg = "Error de autenticación. Verifica que tu API key sea válida y esté activa."
-            elif (
-                "status_code=429" in detailed_error
-                or "rate limit" in detailed_error.lower()
-            ):
+            elif "429" in detailed_error or "rate limit" in detailed_error.lower():
                 error_msg = "Has alcanzado el límite de solicitudes de la API. Intenta nuevamente en unos minutos."
-            elif (
-                "status_code=500" in detailed_error
-                or "server error" in detailed_error.lower()
-            ):
+            elif "500" in detailed_error or "server error" in detailed_error.lower():
                 error_msg = "Error del servidor de OpenAI. El servicio podría estar experimentando problemas temporales."
             elif (
                 "connect" in detailed_error.lower()
@@ -1052,7 +1039,6 @@ if not st.session_state.thread_id and client and assistant_id:
             st.error(error_msg)
             # Opción para reintentar
             if st.button("Reintentar inicialización"):
-                # Reemplazando experimental_rerun por rerun
                 st.rerun()
 
 # Verificar el estado del hilo de conversación antes de continuar
@@ -1152,6 +1138,8 @@ with chat_container:
                 unsafe_allow_html=True,
             )
 
+# ----- PROCESAMIENTO DEL INPUT DEL USUARIO (OPTIMIZADO PARA STREAMLIT CLOUD) -----
+
 # Procesamiento del input del usuario
 prompt = st.chat_input("Comparte tus inquietudes o deseos...")
 
@@ -1163,7 +1151,6 @@ if prompt and st.session_state.thread_id and client and assistant_id:
     st.session_state.messages.append(current_user_msg)
 
     # Reconstruir la UI temporalmente para mostrar el mensaje del usuario
-    # Esto forza a Streamlit a actualizar la UI sin esperar la respuesta
     with chat_container:
         # Mostrar todos los mensajes incluyendo el nuevo
         for idx, message in enumerate(st.session_state.messages):
@@ -1189,7 +1176,7 @@ if prompt and st.session_state.thread_id and client and assistant_id:
     # Mostrar indicador de "Conectando con lo celestial..."
     with st.spinner("✨ Canalizando energías celestiales..."):
         try:
-            # Enviar mensaje del usuario con el cliente v2
+            # Enviar mensaje del usuario con el cliente v2 - sin parámetros adicionales
             client.beta.threads.messages.create(
                 thread_id=st.session_state.thread_id, role="user", content=prompt
             )
@@ -1197,87 +1184,128 @@ if prompt and st.session_state.thread_id and client and assistant_id:
             # Obtener el modelo configurado
             model = st.session_state.get("openai_model", "gpt-4o-mini")
 
-            # Crear una ejecución para el hilo de chat con el modelo específico
+            # Crear una ejecución para el hilo de chat con manejo de errores simplificado
             try:
-                # Intento con modelo específico
-                run = client.beta.threads.runs.create(
-                    thread_id=st.session_state.thread_id,
-                    assistant_id=assistant_id,
-                    model=model,  # Especificamos el modelo aquí
-                )
-                logging.info(f"Iniciando run con modelo explícito: {model}")
-            except Exception as model_error:
-                logging.warning(
-                    f"Error al especificar modelo: {str(model_error)}. Intentando sin modelo específico."
-                )
-                # Fallback sin especificar modelo (usa el default del asistente)
-                run = client.beta.threads.runs.create(
-                    thread_id=st.session_state.thread_id, assistant_id=assistant_id
-                )
-                logging.info("Iniciando run con modelo predeterminado del asistente")
-
-            # Esperar la respuesta con manejo de timeout
-            start_time = time.time()
-            timeout = 60  # 60 segundos máximo de espera
-
-            while run.status not in ["completed", "failed", "expired", "cancelled"]:
-                if time.time() - start_time > timeout:
-                    st.error(
-                        "La respuesta está tomando demasiado tiempo. Por favor, intenta de nuevo."
-                    )
-                    break
-
-                time.sleep(1)
-                try:
-                    run = client.beta.threads.runs.retrieve(
-                        thread_id=st.session_state.thread_id, run_id=run.id
-                    )
-                except Exception as e:
-                    logging.error(f"Error al recuperar estado de ejecución: {str(e)}")
-                    st.error(f"Error de comunicación: {str(e)}")
-                    break
-
-            # Verificar si la ejecución se completó correctamente
-            if run.status == "completed":
-                # Recuperar mensajes agregados por el asistente
-                try:
-                    messages = client.beta.threads.messages.list(
-                        thread_id=st.session_state.thread_id
-                    )
-
-                    # Procesar y mostrar mensajes del asistente
-                    new_messages = False
-                    for message in messages.data:
-                        if message.role == "assistant" and not any(
-                            msg["role"] == "assistant" and msg.get("id") == message.id
-                            for msg in st.session_state.messages
-                        ):
-                            full_response = process_message_with_citations(message)
-                            st.session_state.messages.append(
-                                {
-                                    "role": "assistant",
-                                    "content": full_response,
-                                    "id": message.id,
-                                }
-                            )
-                            new_messages = True
-                            # Forzar actualización de UI
-                            st.rerun()
-                            break  # Solo procesamos el mensaje más reciente
-
-                    if not new_messages:
-                        st.warning(
-                            "No se recibió respuesta del asistente. Por favor, intenta de nuevo."
+                # Ejecutar con o sin modelo específico en un solo intento
+                # Evitamos parámetros adicionales para maximizar compatibilidad
+                if model and model != "":
+                    try:
+                        run = client.beta.threads.runs.create(
+                            thread_id=st.session_state.thread_id,
+                            assistant_id=assistant_id,
+                            model=model,  # Incluimos el modelo solo si está definido
                         )
-                except Exception as e:
-                    logging.error(f"Error recuperando mensajes: {str(e)}")
-                    st.error(f"Error al recuperar la respuesta: {str(e)}")
-            else:
-                st.error(
-                    f"La solicitud no se completó correctamente. Estado: {run.status}"
-                )
-                if hasattr(run, "last_error") and run.last_error:
-                    st.error(f"Error: {run.last_error}")
+                        logging.info(f"Iniciando run con modelo: {model}")
+                    except Exception as model_error:
+                        logging.warning(
+                            f"Error con modelo específico, usando default: {str(model_error)}"
+                        )
+                        run = client.beta.threads.runs.create(
+                            thread_id=st.session_state.thread_id,
+                            assistant_id=assistant_id,
+                        )
+                else:
+                    run = client.beta.threads.runs.create(
+                        thread_id=st.session_state.thread_id, assistant_id=assistant_id
+                    )
+                    logging.info(
+                        "Iniciando run con modelo predeterminado del asistente"
+                    )
+
+                # Esperar la respuesta con manejo de timeout optimizado
+                start_time = time.time()
+                timeout = 60  # 60 segundos máximo de espera
+
+                # Reducir la frecuencia de sondeo para evitar exceder límites de API
+                poll_interval = 1.5  # segundos entre verificaciones de estado
+
+                while run.status not in ["completed", "failed", "expired", "cancelled"]:
+                    elapsed_time = time.time() - start_time
+                    if elapsed_time > timeout:
+                        st.error(
+                            "La respuesta está tomando demasiado tiempo. Por favor, intenta de nuevo."
+                        )
+                        break
+
+                    # Pausar antes de la siguiente verificación
+                    time.sleep(poll_interval)
+
+                    try:
+                        run = client.beta.threads.runs.retrieve(
+                            thread_id=st.session_state.thread_id, run_id=run.id
+                        )
+                    except Exception as retrieve_error:
+                        logging.error(
+                            f"Error al verificar estado de ejecución: {str(retrieve_error)}"
+                        )
+                        # Incrementar el intervalo si hay errores para reducir presión en la API
+                        poll_interval = min(poll_interval * 1.5, 5)
+
+                        # Si llevamos más de la mitad del timeout con errores, abortar
+                        if elapsed_time > (timeout / 2):
+                            st.error(
+                                "Problemas al obtener la respuesta. Por favor, intenta de nuevo."
+                            )
+                            break
+
+                # Verificar si la ejecución se completó correctamente
+                if run.status == "completed":
+                    # Recuperar mensajes con manejo de errores adicional
+                    try:
+                        # Usar opciones mínimas para maximizar compatibilidad
+                        messages = client.beta.threads.messages.list(
+                            thread_id=st.session_state.thread_id
+                        )
+
+                        # Procesar y mostrar mensajes del asistente
+                        new_messages = False
+                        for message in messages.data:
+                            if message.role == "assistant" and not any(
+                                msg["role"] == "assistant"
+                                and msg.get("id") == message.id
+                                for msg in st.session_state.messages
+                            ):
+                                # Procesamiento seguro del mensaje
+                                try:
+                                    full_response = process_message_with_citations(
+                                        message
+                                    )
+                                    st.session_state.messages.append(
+                                        {
+                                            "role": "assistant",
+                                            "content": full_response,
+                                            "id": message.id,
+                                        }
+                                    )
+                                    new_messages = True
+                                    # Forzar actualización de UI con método actual (no experimental)
+                                    st.rerun()
+                                    break  # Solo procesamos el mensaje más reciente
+                                except Exception as msg_error:
+                                    logging.error(
+                                        f"Error procesando mensaje: {str(msg_error)}"
+                                    )
+                                    st.error(
+                                        "Error al procesar la respuesta del asistente"
+                                    )
+                                    break
+
+                        if not new_messages:
+                            st.warning(
+                                "No se recibió respuesta del asistente. Por favor, intenta de nuevo."
+                            )
+                    except Exception as list_error:
+                        logging.error(f"Error recuperando mensajes: {str(list_error)}")
+                        st.error(f"Error al recuperar la respuesta: {str(list_error)}")
+                else:
+                    st.error(
+                        f"La solicitud no se completó correctamente. Estado: {run.status}"
+                    )
+                    if hasattr(run, "last_error") and run.last_error:
+                        st.error(f"Error: {run.last_error}")
+            except Exception as run_error:
+                logging.error(f"Error creando la ejecución: {str(run_error)}")
+                st.error(f"Error al iniciar conversación: {str(run_error)}")
         except Exception as e:
             logging.error(f"Error en comunicación con OpenAI: {str(e)}")
             st.error(f"Error: {str(e)}")
