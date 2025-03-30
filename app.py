@@ -42,7 +42,7 @@ def load_lottie_url(url):
             return None
         return r.json()
     except Exception as e:
-        st.debug(f"Error cargando animación Lottie: {e}")
+        st.error(f"Error cargando animación Lottie: {e}")
         return None
 
 def get_random_celestial_quote():
