@@ -48,6 +48,47 @@ st.set_page_config(
     },
 )
 
+# ----- FUNCIÓN PARA CREAR CLIENTE OPENAI COMPATIBLE CON MÚLTIPLES ENTORNOS -----
+
+
+def create_openai_client(api_key):
+    """
+    Crea un cliente OpenAI compatible con entornos de despliegue y locales
+
+    Esta función maneja las diferencias de configuración entre entornos locales y
+    de despliegue como Streamlit Cloud, evitando errores con argumentos como 'proxies'
+    """
+    try:
+        # Intento básico de creación de cliente con parámetros óptimos
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://api.openai.com/v1",
+            default_headers={"OpenAI-Beta": "assistants=v2"},
+        )
+        logging.info("Cliente OpenAI creado con parámetros completos")
+        return client
+    except TypeError as e:
+        # Si falla por argumentos no soportados
+        logging.warning(
+            f"Error al crear cliente OpenAI con parámetros extendidos: {str(e)}"
+        )
+
+        try:
+            # Intento con parámetros mínimos
+            client = OpenAI(api_key=api_key)
+
+            # Agregar encabezado de API v2 después de la inicialización
+            if hasattr(client, "default_headers"):
+                client.default_headers["OpenAI-Beta"] = "assistants=v2"
+
+            logging.info("Cliente OpenAI creado con parámetros mínimos")
+            return client
+        except Exception as e2:
+            # Si falla el segundo intento
+            logging.error(f"Error crítico al crear cliente OpenAI: {str(e2)}")
+            raise e2
+
+
 # ----- FUNCIONES AUXILIARES -----
 
 
@@ -57,12 +98,8 @@ def test_openai_connection():
         if not st.session_state.get("openai_api_key"):
             return "❌ Sin configurar", "API key no configurada"
 
-        # Crear cliente compatible con v2
-        client = OpenAI(
-            api_key=st.session_state.get("openai_api_key"),
-            base_url="https://api.openai.com/v1",
-            default_headers={"OpenAI-Beta": "assistants=v2"},
-        )
+        # Usar función mejorada para crear el cliente
+        client = create_openai_client(st.session_state.get("openai_api_key"))
 
         # Prueba simple de conexión - método actualizado sin parámetro limit
         response = client.models.list()
@@ -299,6 +336,27 @@ def show_diagnostic_panel():
             }
             st.json(safe_session)
 
+        # Información de entorno
+        st.markdown("### Información del Entorno de Ejecución")
+        env_info = {
+            "Python Version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+            "Streamlit Version": st.__version__,
+            "OpenAI Package": "1.12.0",  # Esto podría determinarse programáticamente si se necesita
+            "Entorno": (
+                "Streamlit Cloud"
+                if os.environ.get("STREAMLIT_SHARING_MODE")
+                else "Local"
+            ),
+            "Tema": (
+                "Oscuro" if st.config.get_option("theme.base") == "dark" else "Claro"
+            ),
+        }
+
+        env_df = pd.DataFrame(
+            {"Parámetro": list(env_info.keys()), "Valor": list(env_info.values())}
+        )
+        st.table(env_df)
+
 
 def setup_openai_client():
     """Configuración robusta del cliente OpenAI con compatibilidad v2"""
@@ -380,7 +438,7 @@ def setup_openai_client():
 
             # Valor predeterminado para el modelo
             if not model:
-                model = "gpt-4o-mini"  # Valor predeterminado si no se especifica
+                model = "gpt-4o-mini"  # Valor predeterminado si no se especifica otro modelo
                 st.session_state.openai_model = model
 
             # Mostrar el modelo configurado
@@ -391,12 +449,8 @@ def setup_openai_client():
     # 4. Validación y configuración del cliente
     if api_key and assistant_id:
         try:
-            # Crear cliente compatible con v2
-            client = OpenAI(
-                api_key=api_key,
-                base_url="https://api.openai.com/v1",
-                default_headers={"OpenAI-Beta": "assistants=v2"},
-            )
+            # Usar la nueva función para crear el cliente compatible
+            client = create_openai_client(api_key)
 
             # Prueba básica de conectividad
             try:
@@ -706,7 +760,7 @@ if "messages" not in st.session_state:
 
 if "app_version" not in st.session_state:
     st.session_state.app_version = (
-        "2.1.0"  # Actualizada por el soporte de modelo personalizado
+        "2.1.1"  # Incrementado por las optimizaciones de compatibilidad
     )
 
 if "last_update" not in st.session_state:
@@ -1144,13 +1198,23 @@ if prompt and st.session_state.thread_id and client and assistant_id:
             model = st.session_state.get("openai_model", "gpt-4o-mini")
 
             # Crear una ejecución para el hilo de chat con el modelo específico
-            run = client.beta.threads.runs.create(
-                thread_id=st.session_state.thread_id,
-                assistant_id=assistant_id,
-                model=model,  # Especificamos el modelo aquí
-            )
-
-            logging.info(f"Iniciando run con modelo: {model}")
+            try:
+                # Intento con modelo específico
+                run = client.beta.threads.runs.create(
+                    thread_id=st.session_state.thread_id,
+                    assistant_id=assistant_id,
+                    model=model,  # Especificamos el modelo aquí
+                )
+                logging.info(f"Iniciando run con modelo explícito: {model}")
+            except Exception as model_error:
+                logging.warning(
+                    f"Error al especificar modelo: {str(model_error)}. Intentando sin modelo específico."
+                )
+                # Fallback sin especificar modelo (usa el default del asistente)
+                run = client.beta.threads.runs.create(
+                    thread_id=st.session_state.thread_id, assistant_id=assistant_id
+                )
+                logging.info("Iniciando run con modelo predeterminado del asistente")
 
             # Esperar la respuesta con manejo de timeout
             start_time = time.time()
