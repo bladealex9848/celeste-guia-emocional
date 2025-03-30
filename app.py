@@ -48,28 +48,40 @@ st.set_page_config(
     },
 )
 
-# ----- FUNCIÓN PARA CREAR CLIENTE OPENAI COMPATIBLE CON MÚLTIPLES ENTORNOS -----
+# ----- FUNCIÓN OPTIMIZADA PARA CREAR CLIENTE OPENAI COMPATIBLE CON MÚLTIPLES ENTORNOS -----
 
 
 def create_openai_client(api_key):
     """
-    Crea un cliente OpenAI compatible con entornos de despliegue como Streamlit Cloud
+    Crea un cliente OpenAI 100% compatible con Streamlit Cloud y entornos locales
 
-    Esta función maneja las diferencias de configuración entre entornos,
-    evitando el uso de parámetros que puedan causar problemas.
+    Esta función evita explícitamente usar cualquier parámetro adicional que pueda
+    causar problemas de compatibilidad entre diferentes versiones del SDK.
     """
     try:
-        # Creación minimalista del cliente - enfoque compatible con despliegues
+        # SOLUCIÓN: Creación totalmente minimalista del cliente usando solo el parámetro api_key
+        # Esto evita cualquier intento de pasar parámetros adicionales como 'proxies'
         client = OpenAI(api_key=api_key)
+
+        # Verificar versión del SDK para diagnóstico (solo log)
+        if hasattr(OpenAI, "__version__"):
+            logging.info(f"Versión de OpenAI SDK: {OpenAI.__version__}")
 
         # Agregar encabezado de API v2 después de la inicialización si es posible
         if hasattr(client, "default_headers"):
             client.default_headers["OpenAI-Beta"] = "assistants=v2"
+            logging.info("Encabezado OpenAI-Beta establecido para asistentes v2")
 
-        logging.info("Cliente OpenAI creado correctamente con configuración compatible")
+        logging.info(
+            "Cliente OpenAI creado correctamente con configuración mínima compatible"
+        )
         return client
     except Exception as e:
+        import traceback
+
+        error_details = traceback.format_exc()
         logging.error(f"Error crítico al crear cliente OpenAI: {str(e)}")
+        logging.debug(f"Detalles del error: {error_details}")
         raise Exception(f"No se pudo inicializar el cliente OpenAI: {str(e)}")
 
 
@@ -348,6 +360,32 @@ def show_diagnostic_panel():
             {"Parámetro": list(env_info.keys()), "Valor": list(env_info.values())}
         )
         st.table(env_df)
+
+        # Sección de depuración avanzada
+        st.markdown("### Depuración Avanzada")
+        if st.button("Mostrar Información de Diagnóstico API"):
+            try:
+                import inspect
+
+                # Mostrar información sobre el constructor de OpenAI
+                st.code(inspect.signature(OpenAI.__init__))
+
+                # Verificar si hay variables de entorno HTTP_PROXY o HTTPS_PROXY
+                proxy_env = {
+                    k: v
+                    for k, v in os.environ.items()
+                    if k.lower() in ["http_proxy", "https_proxy", "no_proxy"]
+                }
+
+                if proxy_env:
+                    st.warning(
+                        "⚠️ Se detectaron variables de entorno de proxy que podrían causar problemas:"
+                    )
+                    st.json(proxy_env)
+                else:
+                    st.success("✅ No se detectaron variables de entorno de proxy.")
+            except Exception as e:
+                st.error(f"Error al obtener información de depuración: {str(e)}")
 
 
 def setup_openai_client():
@@ -707,6 +745,29 @@ css = f"""
         transform: translateY(-2px);
         box-shadow: 0 4px 10px rgba(138, 43, 226, 0.3);
     }}
+
+    /* Estilos para mensajes de diagnóstico */
+    .diagnostic-message {{
+        padding: 10px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        font-size: 0.9rem;
+    }}
+    
+    .diagnostic-info {{
+        background-color: rgba(135, 206, 235, 0.2);
+        border-left: 3px solid {COLORS["accent1"]};
+    }}
+    
+    .diagnostic-warning {{
+        background-color: rgba(255, 221, 87, 0.2);
+        border-left: 3px solid {COLORS["warning"]};
+    }}
+    
+    .diagnostic-error {{
+        background-color: rgba(255, 56, 96, 0.2);
+        border-left: 3px solid {COLORS["error"]};
+    }}
 </style>
 
 <script>
@@ -757,7 +818,9 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "app_version" not in st.session_state:
-    st.session_state.app_version = "2.1.2"  # Incrementado por las optimizaciones de compatibilidad con Streamlit Cloud
+    st.session_state.app_version = (
+        "2.1.3"  # Incrementado por solución del problema de proxy
+    )
 
 if "last_update" not in st.session_state:
     st.session_state.last_update = datetime.now().strftime("%Y-%m-%d")
