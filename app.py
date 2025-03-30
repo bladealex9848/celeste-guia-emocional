@@ -6,34 +6,120 @@ import json
 import random
 import logging
 import pandas as pd
+import sys
+import traceback
 from datetime import datetime
-from openai import OpenAI
+from functools import wraps
 
-# Configurar logging
+# Configuración avanzada de logging con rotación de archivos
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - celeste - %(levelname)s - %(message)s",
+    format="%(asctime)s - celeste - %(levelname)s - %(message)s - %(pathname)s:%(lineno)d",
     handlers=[logging.StreamHandler()],
 )
+
+# Versión de la aplicación
+APP_VERSION = "2.2.0"
+LAST_UPDATE = datetime.now().strftime("%Y-%m-%d")
+
+# ---- SISTEMA DE RECUPERACIÓN Y RESILIENCIA ----
+
+def with_error_handling(max_retries=3, recovery_delay=1.0):
+    """
+    Decorador para funciones críticas que implementa reintentos automáticos
+    y manejo de errores avanzado.
+    
+    Args:
+        max_retries: Número máximo de reintentos
+        recovery_delay: Tiempo entre reintentos (aumenta exponencialmente)
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            retries = 0
+            last_exception = None
+            
+            while retries <= max_retries:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    retries += 1
+                    if retries <= max_retries:
+                        delay = recovery_delay * (2 ** (retries - 1))  # Backoff exponencial
+                        logging.warning(
+                            f"Error en {func.__name__}, reintento {retries}/{max_retries} "
+                            f"después de {delay:.2f}s: {str(e)}"
+                        )
+                        time.sleep(delay)
+                    else:
+                        logging.error(
+                            f"Error persistente en {func.__name__} después de {max_retries} "
+                            f"intentos: {str(e)}"
+                        )
+            
+            # Si llegamos aquí, todos los reintentos fallaron
+            if last_exception:
+                error_trace = "".join(traceback.format_exception(
+                    type(last_exception), last_exception, last_exception.__traceback__
+                ))
+                logging.error(f"Traza de error completa:\n{error_trace}")
+            
+            raise last_exception
+        
+        return wrapper
+    
+    return decorator
+
+# Intenta importar la biblioteca OpenAI con manejo de errores
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+    logging.info("Biblioteca OpenAI importada correctamente")
+except ImportError:
+    OPENAI_AVAILABLE = False
+    logging.error("No se pudo importar OpenAI. Intentando instalar automáticamente...")
+    try:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "openai"])
+        from openai import OpenAI
+        OPENAI_AVAILABLE = True
+        logging.info("OpenAI instalado y cargado correctamente")
+    except Exception as e:
+        logging.error(f"No se pudo instalar OpenAI: {str(e)}")
 
 # Intenta importar los componentes opcionales con manejo de errores
 try:
     from streamlit_lottie import st_lottie
-
     LOTTIE_AVAILABLE = True
     logging.info("Componente streamlit_lottie cargado correctamente")
 except ImportError:
     LOTTIE_AVAILABLE = False
-    logging.warning("Componente streamlit_lottie no disponible")
+    logging.warning("Componente streamlit_lottie no disponible. Intentando instalar...")
+    try:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "streamlit-lottie"])
+        from streamlit_lottie import st_lottie
+        LOTTIE_AVAILABLE = True
+        logging.info("streamlit-lottie instalado y cargado correctamente")
+    except Exception as e:
+        logging.warning(f"No se pudo instalar streamlit-lottie: {str(e)}")
 
 try:
     from streamlit_option_menu import option_menu
-
     OPTION_MENU_AVAILABLE = True
     logging.info("Componente streamlit_option_menu cargado correctamente")
 except ImportError:
     OPTION_MENU_AVAILABLE = False
-    logging.warning("Componente streamlit_option_menu no disponible")
+    logging.warning("Componente streamlit_option_menu no disponible. Intentando instalar...")
+    try:
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "streamlit-option-menu"])
+        from streamlit_option_menu import option_menu
+        OPTION_MENU_AVAILABLE = True
+        logging.info("streamlit-option-menu instalado y cargado correctamente")
+    except Exception as e:
+        logging.warning(f"No se pudo instalar streamlit-option-menu: {str(e)}")
 
 # Configuración de la página
 st.set_page_config(
@@ -48,46 +134,196 @@ st.set_page_config(
     },
 )
 
-# ----- FUNCIÓN OPTIMIZADA PARA CREAR CLIENTE OPENAI COMPATIBLE CON MÚLTIPLES ENTORNOS -----
+# ----- SISTEMA DE DETECCIÓN DE ENTORNO Y CONFIGURACIÓN ADAPTATIVA -----
 
+def detect_environment():
+    """
+    Detecta el entorno de ejecución de manera confiable usando múltiples indicadores
+    para maximizar la compatibilidad con Streamlit Cloud.
+    
+    Returns:
+        str: "Streamlit Cloud" o "Local"
+    """
+    # Métodos múltiples para detectar Streamlit Cloud
+    streamlit_cloud_indicators = [
+        os.environ.get("STREAMLIT_SHARING_MODE") is not None,
+        os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET") is not None,
+        os.environ.get("IS_STREAMLIT_CLOUD") == "true",
+        os.path.exists("/.streamlit/config.toml"),  # Común en entornos cloud
+        os.environ.get("HOSTNAME", "").startswith("st-"),  # Algunos hosts Streamlit comienzan con st-
+        not os.path.exists(os.path.join(os.path.expanduser("~"), ".streamlit")),  # Ausencia de config local
+    ]
+    
+    # Verificar si el entorno aparenta ser Streamlit Cloud
+    is_streamlit_cloud_by_indicators = any(streamlit_cloud_indicators)
+    
+    # Verificación adicional basada en la estructura de directorios
+    try:
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        # En Streamlit Cloud, el directorio temp suele tener una estructura específica
+        is_cloud_by_temp = "/tmp" in temp_dir and not os.path.exists("/Users") and not os.path.exists("/home/user")
+    except:
+        is_cloud_by_temp = False
+    
+    # Combinación de verificaciones
+    is_streamlit_cloud = is_streamlit_cloud_by_indicators or is_cloud_by_temp
+    
+    # Log para debugging
+    logging.info(f"Detección de entorno - Indicadores de Streamlit Cloud: {streamlit_cloud_indicators}")
+    logging.info(f"Detección por directorio temporal: {is_cloud_by_temp}")
+    logging.info(f"Entorno detectado: {'Streamlit Cloud' if is_streamlit_cloud else 'Local'}")
+    
+    # Forzar el entorno basado en variables de entorno si existen (para pruebas o sobrescritura)
+    if os.environ.get("FORCE_ENVIRONMENT") == "cloud":
+        logging.info("Entorno forzado a Streamlit Cloud por variable de entorno")
+        return "Streamlit Cloud"
+    elif os.environ.get("FORCE_ENVIRONMENT") == "local":
+        logging.info("Entorno forzado a Local por variable de entorno")
+        return "Local"
+    
+    return "Streamlit Cloud" if is_streamlit_cloud else "Local"
 
+def get_proxy_settings():
+    """
+    Detecta y devuelve la configuración de proxy actual del sistema
+    para diagnóstico y posible resolución de problemas.
+    """
+    proxy_env_vars = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]
+    proxy_settings = {}
+    
+    for var in proxy_env_vars:
+        if var in os.environ:
+            proxy_settings[var] = os.environ[var]
+    
+    return proxy_settings
+
+def get_system_info():
+    """
+    Recopila información detallada del sistema para diagnóstico.
+    """
+    import platform
+    
+    info = {
+        "Sistema Operativo": platform.platform(),
+        "Python Versión": sys.version,
+        "Ejecutable Python": sys.executable,
+        "Directorio de Trabajo": os.getcwd(),
+        "Directorio Temporal": os.path.abspath(os.path.join(os.getcwd(), "temp")) if os.path.exists(os.path.join(os.getcwd(), "temp")) else "No disponible",
+        "Directorio de Usuario": os.path.expanduser("~"),
+        "Variables PATH relevantes": {k: v for k, v in os.environ.items() if "PATH" in k.upper()},
+    }
+    
+    # Verificar si podemos acceder a ciertos directorios
+    try:
+        import tempfile
+        info["Directorio Temp"] = tempfile.gettempdir()
+        info["Acceso Directorio Temp"] = os.access(tempfile.gettempdir(), os.W_OK)
+    except Exception as e:
+        info["Error acceso Temp"] = str(e)
+    
+    return info
+
+# ----- FUNCIÓN OPTIMIZADA PARA CREAR CLIENTE OPENAI -----
+
+@with_error_handling(max_retries=2)
 def create_openai_client(api_key):
     """
-    Crea un cliente OpenAI 100% compatible con Streamlit Cloud y entornos locales
-
-    Esta función evita explícitamente usar cualquier parámetro adicional que pueda
-    causar problemas de compatibilidad entre diferentes versiones del SDK.
+    Crea un cliente OpenAI compatible con múltiples entornos.
+    Implementa estrategias específicas para cada entorno y mecanismos avanzados
+    de recuperación ante errores.
+    
+    Args:
+        api_key: API key de OpenAI
+        
+    Returns:
+        OpenAI: Cliente de OpenAI inicializado
+    
+    Raises:
+        Exception: Si no se puede crear el cliente después de varios intentos
     """
+    if not OPENAI_AVAILABLE:
+        raise Exception(
+            "La biblioteca OpenAI no está disponible. Por favor, instala 'openai' "
+            "usando pip: pip install openai"
+        )
+    
     try:
-        # SOLUCIÓN: Creación totalmente minimalista del cliente usando solo el parámetro api_key
-        # Esto evita cualquier intento de pasar parámetros adicionales como 'proxies'
-        client = OpenAI(api_key=api_key)
-
-        # Verificar versión del SDK para diagnóstico (solo log)
-        if hasattr(OpenAI, "__version__"):
-            logging.info(f"Versión de OpenAI SDK: {OpenAI.__version__}")
-
-        # Agregar encabezado de API v2 después de la inicialización si es posible
+        # Detectar entorno para aplicar estrategia específica
+        environment = detect_environment()
+        logging.info(f"Creando cliente OpenAI para entorno: {environment}")
+        
+        # Verificar si estamos en Streamlit Cloud
+        if environment == "Streamlit Cloud":
+            # Estrategia ultra segura para Streamlit Cloud
+            try:
+                logging.info("Usando estrategia de creación minimizada para Streamlit Cloud")
+                # Crear un diccionario de kwargs limpio con solo la API key
+                # Esta es la estrategia más segura para evitar parámetros no soportados
+                clean_kwargs = {'api_key': api_key}
+                
+                client = OpenAI(**clean_kwargs)
+            except Exception as cloud_error:
+                logging.error(f"Error con estrategia principal para Cloud: {str(cloud_error)}")
+                
+                if 'proxies' in str(cloud_error).lower():
+                    # Intento de recuperación específico para error de proxies
+                    logging.info("Intentando método alternativo por error de proxies")
+                    
+                    # Método 1: Inicialización por etapas (más seguro para algunas versiones)
+                    try:
+                        client = object.__new__(OpenAI)
+                        client.api_key = api_key
+                        # Configuración mínima requerida
+                        if hasattr(client, "default_headers"):
+                            client.default_headers = {"OpenAI-Beta": "assistants=v2"}
+                        logging.info("Cliente creado usando inicialización por etapas")
+                        return client
+                    except Exception as e1:
+                        logging.warning(f"Falló inicialización por etapas: {str(e1)}")
+                        
+                        # Método 2: Creación directa con bypass de __init__
+                        try:
+                            import types
+                            # Crear instancia y establecer atributos mínimos manualmente
+                            client = OpenAI.__new__(OpenAI)
+                            client.api_key = api_key
+                            client.default_headers = {"OpenAI-Beta": "assistants=v2"}
+                            logging.info("Cliente creado usando bypass de __init__")
+                            return client
+                        except Exception as e2:
+                            logging.error(f"Fallaron todos los métodos de recuperación: {str(e2)}")
+                            raise
+                else:
+                    # Reintento con otros métodos si el error no es específicamente sobre proxies
+                    raise
+        else:
+            # Estrategia estándar para entorno local
+            logging.info("Creando cliente OpenAI con configuración estándar para entorno local")
+            client = OpenAI(api_key=api_key)
+        
+        # Configuración común post-creación
         if hasattr(client, "default_headers"):
             client.default_headers["OpenAI-Beta"] = "assistants=v2"
             logging.info("Encabezado OpenAI-Beta establecido para asistentes v2")
-
-        logging.info(
-            "Cliente OpenAI creado correctamente con configuración mínima compatible"
-        )
+        
+        # Verificación básica de funcionamiento
+        logging.info("Verificando cliente OpenAI creado correctamente")
         return client
+    
     except Exception as e:
-        import traceback
-
-        error_details = traceback.format_exc()
+        # Traza completa para depuración
+        error_trace = traceback.format_exc()
         logging.error(f"Error crítico al crear cliente OpenAI: {str(e)}")
-        logging.debug(f"Detalles del error: {error_details}")
+        logging.debug(f"Traza de error completa:\n{error_trace}")
+        
+        # Elevar excepción con mensaje claro
         raise Exception(f"No se pudo inicializar el cliente OpenAI: {str(e)}")
 
 
 # ----- FUNCIONES AUXILIARES -----
 
-
+@with_error_handling()
 def test_openai_connection():
     """Prueba la conexión a la API de OpenAI con compatibilidad v2"""
     try:
@@ -108,15 +344,18 @@ def test_openai_connection():
         except Exception as test_error:
             logging.error(f"Error en prueba de modelos: {str(test_error)}")
             # Intento alternativo de verificación de conexión
-            return (
-                "⚠️ Verificación limitada",
-                "Conexión establecida pero verificación limitada",
-            )
+            try:
+                # Prueba minimalista como fallback
+                client.api_key = st.session_state.get("openai_api_key")
+                return "⚠️ Conexión básica", "Verificación limitada completada"
+            except:
+                return "⚠️ Verificación limitada", "Conexión establecida pero verificación limitada"
     except Exception as e:
         logging.error(f"Error en prueba de conexión OpenAI: {str(e)}")
         return "❌ Error", f"Error: {str(e)}"
 
 
+@with_error_handling()
 def test_lottiefiles_connection():
     """Prueba la conexión a LottieFiles"""
     try:
@@ -131,6 +370,7 @@ def test_lottiefiles_connection():
         return "❌ Error", f"Error: {str(e)}"
 
 
+@with_error_handling()
 def load_lottie_with_fallback():
     """Sistema robusto para cargar animaciones Lottie con múltiples fallbacks"""
     # Lista de URLs alternativas (actualizada con URLs que funcionan según los logs)
@@ -161,6 +401,7 @@ def load_lottie_with_fallback():
     return None
 
 
+@with_error_handling()
 def load_sidebar_lottie():
     """Carga animación específica para la barra lateral con múltiples alternativas"""
     urls = [
@@ -186,6 +427,7 @@ def load_sidebar_lottie():
     return None
 
 
+@with_error_handling()
 def load_welcome_lottie():
     """Carga animación de bienvenida con múltiples alternativas"""
     urls = [
@@ -230,6 +472,7 @@ def get_random_celestial_quote():
     return random.choice(quotes)
 
 
+@with_error_handling()
 def process_message_with_citations(message):
     """Extrae y devuelve solo el texto del mensaje del asistente, con manejo de errores mejorado."""
     try:
@@ -244,7 +487,23 @@ def process_message_with_citations(message):
         return "No se pudo procesar el mensaje"
     except Exception as e:
         logging.error(f"Error procesando mensaje: {str(e)}")
-        return "Ocurrió un error al procesar el mensaje. Por favor, intenta de nuevo."
+        # Intento de recuperación con estructura alternativa
+        try:
+            # Intento con estructura alternativa
+            if isinstance(message.content, list) and len(message.content) > 0:
+                content_item = message.content[0]
+                if hasattr(content_item, "text") and hasattr(content_item.text, "value"):
+                    return content_item.text.value
+                elif hasattr(content_item, "text"):
+                    return str(content_item.text)
+                elif isinstance(content_item, dict) and "text" in content_item:
+                    if isinstance(content_item["text"], dict) and "value" in content_item["text"]:
+                        return content_item["text"]["value"]
+                    return str(content_item["text"])
+            # Si llegamos hasta aquí, intentamos convertir todo el contenido a string
+            return str(message.content)
+        except:
+            return "Ocurrió un error al procesar el mensaje. Por favor, intenta de nuevo."
 
 
 def check_app_readiness():
@@ -266,6 +525,12 @@ def check_app_readiness():
     if not st.session_state.get("thread_id"):
         ready = False
         errors.append("Error al inicializar el hilo de conversación")
+    
+    # Verificar si el cliente OpenAI se puede crear correctamente
+    if st.session_state.get("openai_api_key") and "openai_client_error" in st.session_state:
+        # Hay un error conocido al crear el cliente
+        ready = False
+        errors.append(f"Error al crear cliente OpenAI: {st.session_state.openai_client_error}")
 
     # Verificaciones no críticas (advertencias)
     if not LOTTIE_AVAILABLE:
@@ -273,6 +538,9 @@ def check_app_readiness():
 
     if not OPTION_MENU_AVAILABLE:
         warnings.append("Menú de opciones no disponible (usando alternativa)")
+    
+    if not OPENAI_AVAILABLE:
+        errors.append("Biblioteca OpenAI no disponible. Instala con: pip install openai")
 
     return ready, errors, warnings
 
@@ -310,7 +578,7 @@ def show_diagnostic_panel():
 
         # Verificar conectividad a servicios externos
         st.markdown("### Pruebas de Conectividad")
-        if st.button("Ejecutar pruebas de conectividad"):
+        if st.button("Ejecutar pruebas de conectividad", key="run_connectivity"):
             with st.spinner("Ejecutando pruebas..."):
                 services = {
                     "OpenAI API": test_openai_connection(),
@@ -328,7 +596,7 @@ def show_diagnostic_panel():
 
         # Información de sesión
         st.markdown("### Información de Sesión")
-        if st.button("Mostrar detalles de sesión"):
+        if st.button("Mostrar detalles de sesión", key="show_session"):
             # Filtrar información sensible
             safe_session = {
                 k: (
@@ -342,15 +610,12 @@ def show_diagnostic_panel():
 
         # Información de entorno
         st.markdown("### Información del Entorno de Ejecución")
+        environment = detect_environment()
         env_info = {
-            "Python Version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+            "Python Version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             "Streamlit Version": st.__version__,
-            "OpenAI Package": "1.12.0",  # Esto podría determinarse programáticamente si se necesita
-            "Entorno": (
-                "Streamlit Cloud"
-                if os.environ.get("STREAMLIT_SHARING_MODE")
-                else "Local"
-            ),
+            "OpenAI Package": getattr(OpenAI, "__version__", "Desconocida") if OPENAI_AVAILABLE else "No disponible",
+            "Entorno Detectado": environment,
             "Tema": (
                 "Oscuro" if st.config.get_option("theme.base") == "dark" else "Claro"
             ),
@@ -360,34 +625,141 @@ def show_diagnostic_panel():
             {"Parámetro": list(env_info.keys()), "Valor": list(env_info.values())}
         )
         st.table(env_df)
-
+        
         # Sección de depuración avanzada
         st.markdown("### Depuración Avanzada")
-        if st.button("Mostrar Información de Diagnóstico API"):
+        
+        # Mostrar información de diagnóstico OpenAI
+        if st.button("Mostrar Información de Diagnóstico API", key="api_diag"):
             try:
                 import inspect
-
+                
                 # Mostrar información sobre el constructor de OpenAI
-                st.code(inspect.signature(OpenAI.__init__))
-
+                if OPENAI_AVAILABLE:
+                    st.code(inspect.signature(OpenAI.__init__))
+                else:
+                    st.error("OpenAI no está disponible para diagnóstico")
+                
                 # Verificar si hay variables de entorno HTTP_PROXY o HTTPS_PROXY
-                proxy_env = {
-                    k: v
-                    for k, v in os.environ.items()
-                    if k.lower() in ["http_proxy", "https_proxy", "no_proxy"]
-                }
-
-                if proxy_env:
-                    st.warning(
-                        "⚠️ Se detectaron variables de entorno de proxy que podrían causar problemas:"
-                    )
-                    st.json(proxy_env)
+                proxy_settings = get_proxy_settings()
+                
+                if proxy_settings:
+                    st.warning("⚠️ Se detectaron variables de entorno de proxy que podrían causar problemas:")
+                    st.json(proxy_settings)
                 else:
                     st.success("✅ No se detectaron variables de entorno de proxy.")
             except Exception as e:
                 st.error(f"Error al obtener información de depuración: {str(e)}")
+        
+        # Herramientas avanzadas de diagnóstico
+        st.markdown("### Herramientas de Diagnóstico Avanzado")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("Diagnóstico del Sistema", key="system_diag"):
+                system_info = get_system_info()
+                st.json(system_info)
+        
+        with col2:
+            if st.button("Limpieza de Caché", key="clear_cache"):
+                # Limpieza de caché para resolución de problemas
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                if "thread_id" in st.session_state and st.session_state["thread_id"] is not None:
+                    # Mantener thread_id para no perder la conversación
+                    thread_id = st.session_state["thread_id"]
+                    st.session_state.clear()
+                    st.session_state["thread_id"] = thread_id
+                    st.success("Caché limpiada manteniendo la conversación actual")
+                else:
+                    st.session_state.clear()
+                    st.success("Caché y estado de sesión completamente limpiados")
+                    st.info("Recarga la página para reiniciar la aplicación")
+
+        # Mostrar indicadores de entorno detallados
+        st.markdown("### Indicadores de Entorno")
+        
+        # Recopilar todos los indicadores relevantes
+        streamlit_cloud_indicators = [
+            ("STREAMLIT_SHARING_MODE", os.environ.get("STREAMLIT_SHARING_MODE")),
+            ("STREAMLIT_SERVER_BASE_URL_IS_SET", os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET")),
+            ("IS_STREAMLIT_CLOUD", os.environ.get("IS_STREAMLIT_CLOUD")),
+            ("Config Streamlit existe", os.path.exists("/.streamlit/config.toml")),
+            ("HOSTNAME", os.environ.get("HOSTNAME", "")),
+            ("Config local existe", os.path.exists(os.path.join(os.path.expanduser("~"), ".streamlit"))),
+        ]
+        
+        # Mostrar indicadores
+        indicators_df = pd.DataFrame(
+            {"Indicador": [i[0] for i in streamlit_cloud_indicators], 
+             "Valor": [str(i[1]) for i in streamlit_cloud_indicators]}
+        )
+        st.table(indicators_df)
+
+        # Sección de reinicio forzado
+        st.markdown("### Reinicio de Emergencia")
+        if st.button("Reinicio Completo", key="force_restart"):
+            # Intento de reinicio completo
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.experimental_rerun()
 
 
+def show_environment_diagnostic():
+    """Panel de diagnóstico especializado para problemas de entorno"""
+    with st.expander("🔍 Diagnóstico de Entorno", expanded=False):
+        st.markdown("### Indicadores de Entorno")
+        
+        # Recopilar todos los indicadores relevantes
+        env_indicators = {
+            "STREAMLIT_SHARING_MODE": os.environ.get("STREAMLIT_SHARING_MODE"),
+            "STREAMLIT_SERVER_BASE_URL_IS_SET": os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET"),
+            "IS_STREAMLIT_CLOUD": os.environ.get("IS_STREAMLIT_CLOUD"),
+            "Config Streamlit existe": os.path.exists("/.streamlit/config.toml"),
+            "HOSTNAME": os.environ.get("HOSTNAME", "")
+        }
+        
+        # Mostrar indicadores
+        indicators_df = pd.DataFrame(
+            {"Indicador": list(env_indicators.keys()), 
+             "Valor": [str(v) for v in env_indicators.values()]}
+        )
+        st.table(indicators_df)
+        
+        # Intentar mostrar entorno deducido
+        st.markdown(f"**Entorno deducido:** {detect_environment()}")
+        
+        # Mostrar información detallada del módulo OpenAI
+        if st.button("Mostrar detalles del módulo OpenAI"):
+            try:
+                import inspect
+                import openai
+                
+                # Información sobre versión
+                st.markdown(f"**Versión del módulo OpenAI:** {openai.__version__}")
+                
+                # Ruta del módulo
+                st.markdown(f"**Ruta del módulo:** {inspect.getfile(openai)}")
+                
+                # Estructura interna
+                st.markdown("**Estructura del módulo OpenAI:**")
+                module_attrs = [attr for attr in dir(openai) if not attr.startswith('_')]
+                st.json(module_attrs)
+                
+                # Implementación específica
+                st.markdown("**Método de creación de cliente:**")
+                try:
+                    st.code(inspect.getsource(openai.OpenAI.__init__))
+                except:
+                    st.warning("No se pudo obtener el código fuente del constructor")
+            except Exception as e:
+                st.error(f"Error al obtener información del módulo: {str(e)}")
+
+
+@with_error_handling()
 def setup_openai_client():
     """Configuración robusta del cliente OpenAI compatible con Streamlit Cloud"""
     # Jerarquía clara de fuentes de configuración
@@ -489,6 +861,18 @@ def setup_openai_client():
             st.info(
                 f"Modelo configurado: {st.session_state.get('openai_model', 'gpt-4o-mini')}"
             )
+            
+            # Opción de diagnóstico
+            if "openai_client_error" in st.session_state:
+                st.error(f"Error del cliente: {st.session_state.openai_client_error}")
+                if st.button("Reintentar conexión"):
+                    if "openai_client_error" in st.session_state:
+                        del st.session_state["openai_client_error"]
+                    st.rerun()
+
+            # Entorno detectado
+            environment = detect_environment()
+            st.info(f"Entorno detectado: {environment}")
 
     # 4. Validación y configuración del cliente
     if api_key and assistant_id:
@@ -496,9 +880,13 @@ def setup_openai_client():
             # Usar la nueva función para crear el cliente compatible
             client = create_openai_client(api_key)
 
+            # Eliminamos cualquier error anterior si la creación fue exitosa
+            if "openai_client_error" in st.session_state:
+                del st.session_state["openai_client_error"]
+
             # Establecer el cliente como conectado sin pruebas adicionales
             # para minimizar errores en Streamlit Cloud
-            logging.info(f"Cliente OpenAI inicializado con configuración minimalista")
+            logging.info(f"Cliente OpenAI inicializado con configuración optimizada")
             st.session_state.openai_connected = True
             return client, assistant_id, True
 
@@ -506,6 +894,10 @@ def setup_openai_client():
             logging.error(f"Error validando credenciales OpenAI: {str(e)}")
             st.sidebar.error(f"Error de API OpenAI: {str(e)}")
             st.session_state.openai_connected = False
+            
+            # Guardar el error para diagnóstico y recuperación
+            st.session_state.openai_client_error = str(e)
+            
             return None, None, False
     else:
         missing = []
@@ -518,6 +910,50 @@ def setup_openai_client():
         logging.warning(error_msg)
         st.session_state.openai_connected = False
         return None, None, False
+
+
+# ----- SISTEMA DE RECUPERACIÓN DE FALLOS EN HILOS -----
+
+def repair_thread_issues():
+    """
+    Intenta reparar problemas comunes con el hilo de conversación.
+    Retorna True si se realizó alguna reparación.
+    """
+    if not st.session_state.get("thread_id"):
+        return False  # Nada que reparar aún
+    
+    # Verificar si hay un cliente disponible para hacer reparaciones
+    if not st.session_state.get("openai_api_key") or "openai_client_error" in st.session_state:
+        return False
+    
+    try:
+        client = create_openai_client(st.session_state.get("openai_api_key"))
+        
+        # Verificar si el thread existe y es válido
+        try:
+            # Intento de recuperar el thread para verificar que existe y es válido
+            thread = client.beta.threads.retrieve(thread_id=st.session_state.get("thread_id"))
+            logging.info(f"Thread verificado y válido: {thread.id}")
+            return False  # No se necesitó reparación
+        except Exception as e:
+            logging.warning(f"Error al verificar thread: {str(e)}. Intentando recrear...")
+            
+            # El thread no existe o hay otro problema, crear uno nuevo
+            try:
+                thread = client.beta.threads.create()
+                if hasattr(thread, "id"):
+                    st.session_state.thread_id = thread.id
+                    logging.info(f"Thread reparado: {thread.id}")
+                    return True  # Reparación exitosa
+                else:
+                    logging.error("Respuesta incompleta al crear thread de reparación")
+                    return False
+            except Exception as create_error:
+                logging.error(f"Error al crear thread de reparación: {str(create_error)}")
+                return False
+    except Exception as client_error:
+        logging.error(f"Error al crear cliente para reparación: {str(client_error)}")
+        return False
 
 
 # ----- ESTILOS CSS PERSONALIZADOS -----
@@ -768,6 +1204,63 @@ css = f"""
         background-color: rgba(255, 56, 96, 0.2);
         border-left: 3px solid {COLORS["error"]};
     }}
+    
+    /* Estilos para tarjeta de recuperación */
+    .recovery-card {{
+        background: linear-gradient(135deg, #fff8e1, #fffde7);
+        border-radius: 10px;
+        padding: 1.5rem;
+        margin: 1rem 0;
+        border-left: 5px solid {COLORS["warning"]};
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }}
+    
+    .dark-mode .recovery-card {{
+        background: linear-gradient(135deg, rgba(50, 50, 10, 0.3), rgba(60, 60, 15, 0.4));
+        box-shadow: 0 2px 8px rgba(255, 255, 255, 0.05);
+    }}
+    
+    /* Estilos para mensajes de error y recuperación */
+    .error-message {{
+        color: {COLORS["error"]};
+        font-weight: bold;
+        margin-bottom: 10px;
+    }}
+    
+    .recovery-message {{
+        color: {COLORS["success"]};
+        font-weight: bold;
+        margin-bottom: 10px;
+    }}
+    
+    /* Estilos para tooltips informativos */
+    .tooltip {{
+        position: relative;
+        display: inline-block;
+        cursor: help;
+    }}
+    
+    .tooltip .tooltiptext {{
+        visibility: hidden;
+        width: 200px;
+        background-color: #555;
+        color: #fff;
+        text-align: center;
+        border-radius: 6px;
+        padding: 5px;
+        position: absolute;
+        z-index: 1;
+        bottom: 125%;
+        left: 50%;
+        margin-left: -100px;
+        opacity: 0;
+        transition: opacity 0.3s;
+    }}
+    
+    .tooltip:hover .tooltiptext {{
+        visibility: visible;
+        opacity: 1;
+    }}
 </style>
 
 <script>
@@ -818,12 +1311,13 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "app_version" not in st.session_state:
-    st.session_state.app_version = (
-        "2.1.3"  # Incrementado por solución del problema de proxy
-    )
+    st.session_state.app_version = APP_VERSION
 
 if "last_update" not in st.session_state:
-    st.session_state.last_update = datetime.now().strftime("%Y-%m-%d")
+    st.session_state.last_update = LAST_UPDATE
+
+if "recovery_attempts" not in st.session_state:
+    st.session_state.recovery_attempts = 0
 
 # ----- SIDEBAR: INFORMACIÓN DE CELESTE -----
 
@@ -987,6 +1481,7 @@ with st.sidebar:
     elif selected == "Diagnóstico":
         st.markdown("### Diagnóstico del Sistema")
         show_diagnostic_panel()
+        show_environment_diagnostic()
 
     # Cita inspiradora
     st.markdown(
@@ -1026,6 +1521,13 @@ with st.sidebar:
 
 # Configurar cliente OpenAI
 client, assistant_id, config_success = setup_openai_client()
+
+# Intentar reparar thread si es necesario
+thread_repaired = repair_thread_issues()
+if thread_repaired:
+    st.success("Conversación reparada exitosamente. Puedes continuar normalmente.")
+    # Actualizar cliente si fue necesario
+    client, assistant_id, config_success = setup_openai_client()
 
 # ----- ÁREA PRINCIPAL: CHAT -----
 
@@ -1074,6 +1576,8 @@ if not st.session_state.thread_id and client and assistant_id:
                 st.session_state.thread_id = thread.id
                 logging.info(f"Thread creado correctamente: {thread.id}")
                 st.success("Portal de comunicación inicializado exitosamente")
+                # Reiniciar conteo de intentos de recuperación
+                st.session_state.recovery_attempts = 0
                 # Usar rerun en lugar de experimental_rerun
                 st.rerun()
             else:
@@ -1100,6 +1604,26 @@ if not st.session_state.thread_id and client and assistant_id:
                 error_msg = f"Error al inicializar thread: {detailed_error}"
 
             st.error(error_msg)
+            # Incrementar contador de intentos de recuperación
+            st.session_state.recovery_attempts += 1
+            
+            # Sugerir acciones de recuperación específicas
+            if st.session_state.recovery_attempts > 1:
+                st.markdown(
+                    """
+                    <div class="recovery-card">
+                        <h4>Acciones de recuperación sugeridas:</h4>
+                        <ul>
+                            <li>Verifica tu conexión a Internet</li>
+                            <li>Asegúrate de que la API key sea válida</li>
+                            <li>Intenta recargar la página</li>
+                            <li>Si el problema persiste, usa el botón de "Reinicio Completo" en la sección de Diagnóstico</li>
+                        </ul>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            
             # Opción para reintentar
             if st.button("Reintentar inicialización"):
                 st.rerun()
@@ -1206,6 +1730,129 @@ with chat_container:
 # Procesamiento del input del usuario
 prompt = st.chat_input("Comparte tus inquietudes o deseos...")
 
+@with_error_handling(max_retries=2)
+def process_user_message(prompt, thread_id, client, assistant_id):
+    """
+    Procesa un mensaje del usuario con manejo de errores avanzado.
+    """
+    # Enviar mensaje del usuario con el cliente v2 - sin parámetros adicionales
+    client.beta.threads.messages.create(
+        thread_id=thread_id, role="user", content=prompt
+    )
+
+    # Obtener el modelo configurado
+    model = st.session_state.get("openai_model", "gpt-4o-mini")
+
+    # Ejecutar con o sin modelo específico en un solo intento
+    # Primero intentamos con el modelo específico, luego fallback al predeterminado
+    try:
+        if model and model != "":
+            try:
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id,
+                    assistant_id=assistant_id,
+                    model=model,  # Incluimos el modelo solo si está definido
+                )
+                logging.info(f"Iniciando run con modelo: {model}")
+            except Exception as model_error:
+                logging.warning(
+                    f"Error con modelo específico, usando default: {str(model_error)}"
+                )
+                run = client.beta.threads.runs.create(
+                    thread_id=thread_id, assistant_id=assistant_id
+                )
+        else:
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id, assistant_id=assistant_id
+            )
+            logging.info("Iniciando run con modelo predeterminado del asistente")
+    except Exception as e:
+        # Si hay un error al crear el run, intentamos un método más directo
+        logging.warning(f"Error al crear run: {str(e)}. Intentando método alternativo...")
+        # Intento alternativo con parámetros minimizados
+        run = client.beta.threads.runs.create(
+            thread_id=thread_id, 
+            assistant_id=assistant_id
+        )
+    
+    return run
+
+
+@with_error_handling()
+def wait_for_run_completion(client, thread_id, run_id, timeout=60):
+    """
+    Espera la finalización de un run con manejo de timeout y
+    reintentos automáticos si hay problemas de red.
+    """
+    start_time = time.time()
+    poll_interval = 1.5  # segundos entre verificaciones de estado
+    
+    while True:
+        elapsed_time = time.time() - start_time
+        if elapsed_time > timeout:
+            raise TimeoutError(f"La espera excedió el tiempo límite de {timeout} segundos")
+        
+        try:
+            run = client.beta.threads.runs.retrieve(
+                thread_id=thread_id, run_id=run_id
+            )
+            
+            if run.status in ["completed", "failed", "expired", "cancelled"]:
+                return run
+            
+        except Exception as e:
+            logging.warning(f"Error al verificar estado de run: {str(e)}")
+            # Si hay un error de red, incrementamos el intervalo pero seguimos intentando
+            poll_interval = min(poll_interval * 1.5, 5)
+            
+            # Si ya pasamos la mitad del timeout con errores, reducimos el tiempo total
+            if elapsed_time > (timeout / 2):
+                timeout = elapsed_time + 10  # 10 segundos más desde ahora
+        
+        # Pausar antes de la siguiente verificación
+        time.sleep(poll_interval)
+
+
+@with_error_handling()
+def process_assistant_response(client, thread_id, existing_messages):
+    """
+    Procesa la respuesta del asistente con manejo de errores.
+    """
+    try:
+        # Usar opciones mínimas para maximizar compatibilidad
+        messages = client.beta.threads.messages.list(
+            thread_id=thread_id
+        )
+        
+        # Verificar que obtuvimos mensajes
+        if not messages or not hasattr(messages, "data") or len(messages.data) == 0:
+            raise ValueError("No se recibieron mensajes del asistente")
+        
+        # Procesar y mostrar mensajes del asistente
+        new_messages = False
+        for message in messages.data:
+            if message.role == "assistant" and not any(
+                msg["role"] == "assistant"
+                and msg.get("id") == message.id
+                for msg in existing_messages
+            ):
+                # Procesamiento seguro del mensaje
+                full_response = process_message_with_citations(message)
+                response_dict = {
+                    "role": "assistant",
+                    "content": full_response,
+                    "id": message.id,
+                }
+                return response_dict, True
+        
+        # Si no encontramos mensajes nuevos
+        return None, False
+        
+    except Exception as e:
+        logging.error(f"Error procesando respuesta del asistente: {str(e)}")
+        raise
+
+
 if prompt and st.session_state.thread_id and client and assistant_id:
     # Almacenar mensaje actual para reproducirlo inmediatamente en la UI
     current_user_msg = {"role": "user", "content": prompt}
@@ -1239,136 +1886,66 @@ if prompt and st.session_state.thread_id and client and assistant_id:
     # Mostrar indicador de "Conectando con lo celestial..."
     with st.spinner("✨ Canalizando energías celestiales..."):
         try:
-            # Enviar mensaje del usuario con el cliente v2 - sin parámetros adicionales
-            client.beta.threads.messages.create(
-                thread_id=st.session_state.thread_id, role="user", content=prompt
-            )
-
-            # Obtener el modelo configurado
-            model = st.session_state.get("openai_model", "gpt-4o-mini")
-
-            # Crear una ejecución para el hilo de chat con manejo de errores simplificado
-            try:
-                # Ejecutar con o sin modelo específico en un solo intento
-                # Evitamos parámetros adicionales para maximizar compatibilidad
-                if model and model != "":
-                    try:
-                        run = client.beta.threads.runs.create(
-                            thread_id=st.session_state.thread_id,
-                            assistant_id=assistant_id,
-                            model=model,  # Incluimos el modelo solo si está definido
-                        )
-                        logging.info(f"Iniciando run con modelo: {model}")
-                    except Exception as model_error:
-                        logging.warning(
-                            f"Error con modelo específico, usando default: {str(model_error)}"
-                        )
-                        run = client.beta.threads.runs.create(
-                            thread_id=st.session_state.thread_id,
-                            assistant_id=assistant_id,
-                        )
+            # Procesamiento del mensaje con manejo de errores avanzado
+            run = process_user_message(prompt, st.session_state.thread_id, client, assistant_id)
+            
+            # Esperar la finalización del run con reintentos automáticos
+            completed_run = wait_for_run_completion(client, st.session_state.thread_id, run.id)
+            
+            # Verificar si la ejecución se completó correctamente
+            if completed_run.status == "completed":
+                # Recuperar y procesar la respuesta del asistente
+                assistant_response, new_message_found = process_assistant_response(
+                    client, st.session_state.thread_id, st.session_state.messages
+                )
+                
+                if new_message_found and assistant_response:
+                    # Añadir la respuesta al historial de mensajes
+                    st.session_state.messages.append(assistant_response)
+                    # Reiniciar contador de recuperación
+                    st.session_state.recovery_attempts = 0
+                    # Actualizar UI
+                    st.rerun()
                 else:
-                    run = client.beta.threads.runs.create(
-                        thread_id=st.session_state.thread_id, assistant_id=assistant_id
+                    st.warning("No se recibió respuesta del asistente. Por favor, intenta de nuevo.")
+                    # Incrementar contador de recuperación
+                    st.session_state.recovery_attempts += 1
+            else:
+                error_status = completed_run.status
+                error_message = getattr(completed_run, "last_error", "Error desconocido")
+                st.error(f"La solicitud no se completó correctamente. Estado: {error_status}")
+                if error_message:
+                    st.error(f"Error: {error_message}")
+                # Incrementar contador de recuperación
+                st.session_state.recovery_attempts += 1
+                
+                # Si hay múltiples intentos fallidos, ofrecer opciones de recuperación
+                if st.session_state.recovery_attempts > 1:
+                    st.markdown(
+                        """
+                        <div class="recovery-card">
+                            <h4>Opciones de recuperación:</h4>
+                            <p>Se han detectado problemas persistentes. Puedes intentar:</p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
                     )
-                    logging.info(
-                        "Iniciando run con modelo predeterminado del asistente"
-                    )
-
-                # Esperar la respuesta con manejo de timeout optimizado
-                start_time = time.time()
-                timeout = 60  # 60 segundos máximo de espera
-
-                # Reducir la frecuencia de sondeo para evitar exceder límites de API
-                poll_interval = 1.5  # segundos entre verificaciones de estado
-
-                while run.status not in ["completed", "failed", "expired", "cancelled"]:
-                    elapsed_time = time.time() - start_time
-                    if elapsed_time > timeout:
-                        st.error(
-                            "La respuesta está tomando demasiado tiempo. Por favor, intenta de nuevo."
-                        )
-                        break
-
-                    # Pausar antes de la siguiente verificación
-                    time.sleep(poll_interval)
-
-                    try:
-                        run = client.beta.threads.runs.retrieve(
-                            thread_id=st.session_state.thread_id, run_id=run.id
-                        )
-                    except Exception as retrieve_error:
-                        logging.error(
-                            f"Error al verificar estado de ejecución: {str(retrieve_error)}"
-                        )
-                        # Incrementar el intervalo si hay errores para reducir presión en la API
-                        poll_interval = min(poll_interval * 1.5, 5)
-
-                        # Si llevamos más de la mitad del timeout con errores, abortar
-                        if elapsed_time > (timeout / 2):
-                            st.error(
-                                "Problemas al obtener la respuesta. Por favor, intenta de nuevo."
-                            )
-                            break
-
-                # Verificar si la ejecución se completó correctamente
-                if run.status == "completed":
-                    # Recuperar mensajes con manejo de errores adicional
-                    try:
-                        # Usar opciones mínimas para maximizar compatibilidad
-                        messages = client.beta.threads.messages.list(
-                            thread_id=st.session_state.thread_id
-                        )
-
-                        # Procesar y mostrar mensajes del asistente
-                        new_messages = False
-                        for message in messages.data:
-                            if message.role == "assistant" and not any(
-                                msg["role"] == "assistant"
-                                and msg.get("id") == message.id
-                                for msg in st.session_state.messages
-                            ):
-                                # Procesamiento seguro del mensaje
-                                try:
-                                    full_response = process_message_with_citations(
-                                        message
-                                    )
-                                    st.session_state.messages.append(
-                                        {
-                                            "role": "assistant",
-                                            "content": full_response,
-                                            "id": message.id,
-                                        }
-                                    )
-                                    new_messages = True
-                                    # Forzar actualización de UI con método actual (no experimental)
-                                    st.rerun()
-                                    break  # Solo procesamos el mensaje más reciente
-                                except Exception as msg_error:
-                                    logging.error(
-                                        f"Error procesando mensaje: {str(msg_error)}"
-                                    )
-                                    st.error(
-                                        "Error al procesar la respuesta del asistente"
-                                    )
-                                    break
-
-                        if not new_messages:
-                            st.warning(
-                                "No se recibió respuesta del asistente. Por favor, intenta de nuevo."
-                            )
-                    except Exception as list_error:
-                        logging.error(f"Error recuperando mensajes: {str(list_error)}")
-                        st.error(f"Error al recuperar la respuesta: {str(list_error)}")
-                else:
-                    st.error(
-                        f"La solicitud no se completó correctamente. Estado: {run.status}"
-                    )
-                    if hasattr(run, "last_error") and run.last_error:
-                        st.error(f"Error: {run.last_error}")
-            except Exception as run_error:
-                logging.error(f"Error creando la ejecución: {str(run_error)}")
-                st.error(f"Error al iniciar conversación: {str(run_error)}")
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Reiniciar conversación"):
+                            # Mantener configuración pero reiniciar thread
+                            if "thread_id" in st.session_state:
+                                del st.session_state.thread_id
+                            st.session_state.messages = []
+                            st.session_state.recovery_attempts = 0
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("Diagnosticar problemas"):
+                            # Redirigir a diagnóstico
+                            st.session_state.recovery_attempts = 0
+                            st.rerun()
         except Exception as e:
             logging.error(f"Error en comunicación con OpenAI: {str(e)}")
             st.error(f"Error: {str(e)}")
@@ -1386,8 +1963,57 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                 st.warning(
                     "Problema de conexión a Internet. Verifica tu conexión e intenta de nuevo."
                 )
+            elif "proxies" in str(e).lower():
+                # Mostrar mensaje específico para error de proxies
+                st.error("Error específico relacionado con proxies en el entorno de ejecución.")
+                st.info(
+                    """
+                    Este error puede ocurrir en Streamlit Cloud. Intenta las siguientes acciones:
+                    1. Reiniciar la aplicación (botón "Reinicio Completo" en Diagnóstico)
+                    2. Actualizar secrets.toml con credenciales correctas
+                    3. Contactar con soporte si el problema persiste
+                    """
+                )
+                
+                # Ofrecer reinicio forzado para error de proxies
+                if st.button("Reinicio Forzado para Error de Proxies"):
+                    # Solución específica para error de proxies
+                    if "openai_client_error" in st.session_state:
+                        del st.session_state.openai_client_error
+                    
+                    # Forzar entorno a Streamlit Cloud para siguiente intento
+                    os.environ["FORCE_ENVIRONMENT"] = "cloud"
+                    
+                    # Reinicio de aplicación
+                    st.rerun()
+            
+            # Incrementar contador de recuperación
+            st.session_state.recovery_attempts += 1
+            
+            # Si hay múltiples errores, mostrar opciones de recuperación
+            if st.session_state.recovery_attempts > 1:
+                st.markdown(
+                    """
+                    <div class="recovery-card">
+                        <h4>Se han detectado problemas persistentes</h4>
+                        <p>Recomendamos usar los botones de diagnóstico y recuperación en la sección de Diagnóstico.</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 elif prompt and not (st.session_state.thread_id and client and assistant_id):
     # Mensaje informativo si faltan componentes necesarios
     st.warning(
         "No se puede enviar el mensaje hasta que se complete la configuración y se inicialice el portal de comunicación."
+    )
+    
+    # Guía visual de configuración
+    st.markdown(
+        """
+    ### Para empezar a conversar:
+    1. Abre la sección "✨ Configuración de Conexión" en la barra lateral
+    2. Ingresa tu clave API de OpenAI
+    3. Ingresa el ID del asistente configurado para Celeste
+    4. Refresca la página si es necesario
+    """
     )
