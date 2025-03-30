@@ -2,11 +2,22 @@ import os
 import openai
 import streamlit as st
 import time
-from streamlit_lottie import st_lottie
 import requests
 import json
-from streamlit_option_menu import option_menu
 import random
+
+# Intenta importar los componentes opcionales con manejo de errores
+try:
+    from streamlit_lottie import st_lottie
+    LOTTIE_AVAILABLE = True
+except ImportError:
+    LOTTIE_AVAILABLE = False
+
+try:
+    from streamlit_option_menu import option_menu
+    OPTION_MENU_AVAILABLE = True
+except ImportError:
+    OPTION_MENU_AVAILABLE = False
 
 # Configuración de la página
 st.set_page_config(
@@ -24,11 +35,15 @@ st.set_page_config(
 # ----- FUNCIONES AUXILIARES -----
 
 def load_lottie_url(url):
-    """Carga animaciones Lottie desde URL"""
-    r = requests.get(url)
-    if r.status_code != 200:
+    """Carga animaciones Lottie desde URL con manejo de errores"""
+    try:
+        r = requests.get(url)
+        if r.status_code != 200:
+            return None
+        return r.json()
+    except Exception as e:
+        st.debug(f"Error cargando animación Lottie: {e}")
         return None
-    return r.json()
 
 def get_random_celestial_quote():
     """Devuelve una frase inspiradora celestial aleatoria"""
@@ -48,13 +63,17 @@ def get_random_celestial_quote():
 
 def process_message_with_citations(message):
     """Extrae y devuelve solo el texto del mensaje del asistente."""
-    if hasattr(message, 'content') and len(message.content) > 0:
-        message_content = message.content[0]
-        if hasattr(message_content, 'text'):
-            nested_text = message_content.text
-            if hasattr(nested_text, 'value'):
-                return nested_text.value
-    return 'No se pudo procesar el mensaje'
+    try:
+        if hasattr(message, 'content') and len(message.content) > 0:
+            message_content = message.content[0]
+            if hasattr(message_content, 'text'):
+                nested_text = message_content.text
+                if hasattr(nested_text, 'value'):
+                    return nested_text.value
+        return 'No se pudo procesar el mensaje'
+    except Exception as e:
+        st.error(f"Error procesando mensaje: {str(e)}")
+        return "Ocurrió un error al procesar el mensaje. Por favor, intenta de nuevo."
 
 # ----- ESTILOS CSS PERSONALIZADOS -----
 
@@ -207,27 +226,51 @@ st.markdown(stars_html, unsafe_allow_html=True)
 # ----- SIDEBAR: INFORMACIÓN DE CELESTE -----
 
 with st.sidebar:
-    # Animación Lottie para la sidebar
-    lottie_celestial = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_xOgiZK4ORv.json")
-    st_lottie(lottie_celestial, speed=0.7, height=150, key="sidebar_lottie")
-    
+    # Encabezado de la barra lateral
     st.title("✨ Celeste ✨")
     st.markdown("### Tu guía para la conexión celestial")
-
-    # Menú de navegación
-    selected = option_menu(
-        menu_title=None,
-        options=["Inicio", "Sobre Mí", "Mis Capacidades", "Cómo Trabajar Conmigo"],
-        icons=["house-heart", "person-heart", "stars", "magic"],
-        menu_icon="cast",
-        default_index=0,
-        styles={
-            "container": {"padding": "0!important", "background-color": "transparent"},
-            "icon": {"color": COLORS["accent2"], "font-size": "14px"}, 
-            "nav-link": {"font-size": "14px", "text-align": "left", "margin":"0px", "--hover-color": COLORS["light"]},
-            "nav-link-selected": {"background-color": COLORS["secondary"]},
-        }
-    )
+    
+    # Animación Lottie para la sidebar (solo si está disponible)
+    if LOTTIE_AVAILABLE:
+        try:
+            lottie_celestial = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_xOgiZK4ORv.json")
+            if lottie_celestial:
+                st_lottie(lottie_celestial, speed=0.7, height=150, key="sidebar_lottie")
+            else:
+                st.image("https://via.placeholder.com/150x150.png?text=✨", width=150)
+        except Exception as e:
+            st.warning(f"No se pudo cargar la animación. Usando imagen alternativa.")
+            st.image("https://via.placeholder.com/150x150.png?text=✨", width=150)
+    else:
+        st.image("https://via.placeholder.com/150x150.png?text=✨", width=150)
+    
+    # Menú de navegación (usando option_menu si está disponible, o selectbox si no)
+    if OPTION_MENU_AVAILABLE:
+        try:
+            selected = option_menu(
+                menu_title=None,
+                options=["Inicio", "Sobre Mí", "Mis Capacidades", "Cómo Trabajar Conmigo"],
+                icons=["house-heart", "person-heart", "stars", "magic"],
+                menu_icon="cast",
+                default_index=0,
+                styles={
+                    "container": {"padding": "0!important", "background-color": "transparent"},
+                    "icon": {"color": COLORS["accent2"], "font-size": "14px"}, 
+                    "nav-link": {"font-size": "14px", "text-align": "left", "margin":"0px", "--hover-color": COLORS["light"]},
+                    "nav-link-selected": {"background-color": COLORS["secondary"]},
+                }
+            )
+        except Exception as e:
+            st.warning("Error al cargar menú personalizado. Usando alternativa.")
+            selected = st.selectbox(
+                "Navegación",
+                ["Inicio", "Sobre Mí", "Mis Capacidades", "Cómo Trabajar Conmigo"]
+            )
+    else:
+        selected = st.selectbox(
+            "Navegación",
+            ["Inicio", "Sobre Mí", "Mis Capacidades", "Cómo Trabajar Conmigo"]
+        )
     
     # Contenido basado en la selección del menú
     if selected == "Inicio":
@@ -362,9 +405,12 @@ client = openai
 
 # Inicialización de variables de estado
 if "thread_id" not in st.session_state:
-    st.session_state.thread_id = None
-    thread = client.beta.threads.create()
-    st.session_state.thread_id = thread.id
+    try:
+        thread = client.beta.threads.create()
+        st.session_state.thread_id = thread.id
+    except Exception as e:
+        st.error(f"Error al crear el hilo de conversación: {str(e)}")
+        st.session_state.thread_id = None
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -385,8 +431,19 @@ with chat_container:
     if not st.session_state.messages:
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            lottie_welcome = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_jh9gfdye.json")
-            st_lottie(lottie_welcome, speed=1, height=300, key="welcome")
+            # Usar Lottie si está disponible, de lo contrario usar imagen estática
+            if LOTTIE_AVAILABLE:
+                try:
+                    lottie_welcome = load_lottie_url("https://assets8.lottiefiles.com/packages/lf20_jh9gfdye.json")
+                    if lottie_welcome:
+                        st_lottie(lottie_welcome, speed=1, height=300, key="welcome")
+                    else:
+                        st.image("https://via.placeholder.com/300x300.png?text=✨+Bienvenido", width=300)
+                except Exception as e:
+                    st.image("https://via.placeholder.com/300x300.png?text=✨+Bienvenido", width=300)
+            else:
+                st.image("https://via.placeholder.com/300x300.png?text=✨+Bienvenido", width=300)
+                
             st.markdown("""
             <div style="text-align: center; margin-bottom: 30px;">
                 <h3>¿Cómo puedo ayudarte en tu viaje espiritual hoy?</h3>
@@ -412,43 +469,56 @@ with chat_container:
 # Procesamiento del input del usuario
 prompt = st.chat_input("Comparte tus inquietudes o deseos...")
 
-if prompt:
+if prompt and st.session_state.thread_id:
     # Añadir mensaje del usuario al historial
     st.session_state.messages.append({"role": "user", "content": prompt})
     
     # Mostrar indicador de "Conectando con lo celestial..."
     with st.spinner("✨ Conectando con los planos celestiales..."):
-        # Enviar mensaje del usuario
-        client.beta.threads.messages.create(
-            thread_id=st.session_state.thread_id,
-            role="user",
-            content=prompt
-        )
-
-        # Crear una ejecución para el hilo de chat
-        run = client.beta.threads.runs.create(
-            thread_id=st.session_state.thread_id,
-            assistant_id=ASSISTANT_ID
-        )
-
-        # Esperar la respuesta
-        while run.status != 'completed':
-            time.sleep(1)
-            run = client.beta.threads.runs.retrieve(
+        try:
+            # Enviar mensaje del usuario
+            client.beta.threads.messages.create(
                 thread_id=st.session_state.thread_id,
-                run_id=run.id
+                role="user",
+                content=prompt
             )
 
-        # Recuperar mensajes agregados por el asistente
-        messages = client.beta.threads.messages.list(
-            thread_id=st.session_state.thread_id
-        )
+            # Crear una ejecución para el hilo de chat
+            run = client.beta.threads.runs.create(
+                thread_id=st.session_state.thread_id,
+                assistant_id=ASSISTANT_ID
+            )
 
-        # Procesar y mostrar mensajes del asistente
-        for message in messages:
-            if message.run_id == run.id and message.role == "assistant":
-                full_response = process_message_with_citations(message)
-                st.session_state.messages.append({"role": "assistant", "content": full_response})
-                
-    # Recargar la página para mostrar el nuevo mensaje
-    st.rerun()
+            # Esperar la respuesta con manejo de timeout
+            start_time = time.time()
+            timeout = 60  # 60 segundos máximo de espera
+            
+            while run.status not in ['completed', 'failed', 'expired', 'cancelled']:
+                if time.time() - start_time > timeout:
+                    st.error("La respuesta está tomando demasiado tiempo. Por favor, intenta de nuevo.")
+                    break
+                    
+                time.sleep(1)
+                try:
+                    run = client.beta.threads.runs.retrieve(
+                        thread_id=st.session_state.thread_id,
+                        run_id=run.id
+                    )
+                except Exception as e:
+                    st.error(f"Error al recuperar el estado de la ejecución: {str(e)}")
+                    break
+
+            # Verificar si la ejecución se completó correctamente
+            if run.status == 'completed':
+                # Recuperar mensajes agregados por el asistente
+                try:
+                    messages = client.beta.threads.messages.list(
+                        thread_id=st.session_state.thread_id
+                    )
+
+                    # Procesar y mostrar mensajes del asistente
+                    for message in messages:
+                        if message.run_id == run.id and message.role == "assistant":
+                            full_response = process_message_with_citations(message)
+                            st.session_state.messages.append({"role": "assistant", "content": full_response})
+  
