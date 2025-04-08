@@ -24,21 +24,23 @@ LAST_UPDATE = datetime.now().strftime("%Y-%m-%d")
 
 # ---- SISTEMA DE RECUPERACIÓN Y RESILIENCIA ----
 
+
 def with_error_handling(max_retries=3, recovery_delay=1.0):
     """
     Decorador para funciones críticas que implementa reintentos automáticos
     y manejo de errores avanzado.
-    
+
     Args:
         max_retries: Número máximo de reintentos
         recovery_delay: Tiempo entre reintentos (aumenta exponencialmente)
     """
+
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             retries = 0
             last_exception = None
-            
+
             while retries <= max_retries:
                 try:
                     return func(*args, **kwargs)
@@ -46,7 +48,9 @@ def with_error_handling(max_retries=3, recovery_delay=1.0):
                     last_exception = e
                     retries += 1
                     if retries <= max_retries:
-                        delay = recovery_delay * (2 ** (retries - 1))  # Backoff exponencial
+                        delay = recovery_delay * (
+                            2 ** (retries - 1)
+                        )  # Backoff exponencial
                         logging.warning(
                             f"Error en {func.__name__}, reintento {retries}/{max_retries} "
                             f"después de {delay:.2f}s: {str(e)}"
@@ -57,23 +61,29 @@ def with_error_handling(max_retries=3, recovery_delay=1.0):
                             f"Error persistente en {func.__name__} después de {max_retries} "
                             f"intentos: {str(e)}"
                         )
-            
+
             # Si llegamos aquí, todos los reintentos fallaron
             if last_exception:
-                error_trace = "".join(traceback.format_exception(
-                    type(last_exception), last_exception, last_exception.__traceback__
-                ))
+                error_trace = "".join(
+                    traceback.format_exception(
+                        type(last_exception),
+                        last_exception,
+                        last_exception.__traceback__,
+                    )
+                )
                 logging.error(f"Traza de error completa:\n{error_trace}")
-            
+
             raise last_exception
-        
+
         return wrapper
-    
+
     return decorator
+
 
 # Intenta importar la biblioteca OpenAI con manejo de errores
 try:
     from openai import OpenAI
+
     OPENAI_AVAILABLE = True
     logging.info("Biblioteca OpenAI importada correctamente")
 except ImportError:
@@ -81,8 +91,10 @@ except ImportError:
     logging.error("No se pudo importar OpenAI. Intentando instalar automáticamente...")
     try:
         import subprocess
+
         subprocess.check_call([sys.executable, "-m", "pip", "install", "openai"])
         from openai import OpenAI
+
         OPENAI_AVAILABLE = True
         logging.info("OpenAI instalado y cargado correctamente")
     except Exception as e:
@@ -91,6 +103,7 @@ except ImportError:
 # Intenta importar los componentes opcionales con manejo de errores
 try:
     from streamlit_lottie import st_lottie
+
     LOTTIE_AVAILABLE = True
     logging.info("Componente streamlit_lottie cargado correctamente")
 except ImportError:
@@ -98,8 +111,12 @@ except ImportError:
     logging.warning("Componente streamlit_lottie no disponible. Intentando instalar...")
     try:
         import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "streamlit-lottie"])
+
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "streamlit-lottie"]
+        )
         from streamlit_lottie import st_lottie
+
         LOTTIE_AVAILABLE = True
         logging.info("streamlit-lottie instalado y cargado correctamente")
     except Exception as e:
@@ -107,15 +124,22 @@ except ImportError:
 
 try:
     from streamlit_option_menu import option_menu
+
     OPTION_MENU_AVAILABLE = True
     logging.info("Componente streamlit_option_menu cargado correctamente")
 except ImportError:
     OPTION_MENU_AVAILABLE = False
-    logging.warning("Componente streamlit_option_menu no disponible. Intentando instalar...")
+    logging.warning(
+        "Componente streamlit_option_menu no disponible. Intentando instalar..."
+    )
     try:
         import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "streamlit-option-menu"])
+
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "streamlit-option-menu"]
+        )
         from streamlit_option_menu import option_menu
+
         OPTION_MENU_AVAILABLE = True
         logging.info("streamlit-option-menu instalado y cargado correctamente")
     except Exception as e:
@@ -136,11 +160,12 @@ st.set_page_config(
 
 # ----- SISTEMA DE DETECCIÓN DE ENTORNO Y CONFIGURACIÓN ADAPTATIVA -----
 
+
 def detect_environment():
     """
     Detecta el entorno de ejecución de manera confiable usando múltiples indicadores
     para maximizar la compatibilidad con Streamlit Cloud.
-    
+
     Returns:
         str: "Streamlit Cloud" o "Local"
     """
@@ -150,30 +175,43 @@ def detect_environment():
         os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET") is not None,
         os.environ.get("IS_STREAMLIT_CLOUD") == "true",
         os.path.exists("/.streamlit/config.toml"),  # Común en entornos cloud
-        os.environ.get("HOSTNAME", "").startswith("st-"),  # Algunos hosts Streamlit comienzan con st-
-        not os.path.exists(os.path.join(os.path.expanduser("~"), ".streamlit")),  # Ausencia de config local
+        os.environ.get("HOSTNAME", "").startswith(
+            "st-"
+        ),  # Algunos hosts Streamlit comienzan con st-
+        not os.path.exists(
+            os.path.join(os.path.expanduser("~"), ".streamlit")
+        ),  # Ausencia de config local
     ]
-    
+
     # Verificar si el entorno aparenta ser Streamlit Cloud
     is_streamlit_cloud_by_indicators = any(streamlit_cloud_indicators)
-    
+
     # Verificación adicional basada en la estructura de directorios
     try:
         import tempfile
+
         temp_dir = tempfile.gettempdir()
         # En Streamlit Cloud, el directorio temp suele tener una estructura específica
-        is_cloud_by_temp = "/tmp" in temp_dir and not os.path.exists("/Users") and not os.path.exists("/home/user")
+        is_cloud_by_temp = (
+            "/tmp" in temp_dir
+            and not os.path.exists("/Users")
+            and not os.path.exists("/home/user")
+        )
     except:
         is_cloud_by_temp = False
-    
+
     # Combinación de verificaciones
     is_streamlit_cloud = is_streamlit_cloud_by_indicators or is_cloud_by_temp
-    
+
     # Log para debugging
-    logging.info(f"Detección de entorno - Indicadores de Streamlit Cloud: {streamlit_cloud_indicators}")
+    logging.info(
+        f"Detección de entorno - Indicadores de Streamlit Cloud: {streamlit_cloud_indicators}"
+    )
     logging.info(f"Detección por directorio temporal: {is_cloud_by_temp}")
-    logging.info(f"Entorno detectado: {'Streamlit Cloud' if is_streamlit_cloud else 'Local'}")
-    
+    logging.info(
+        f"Entorno detectado: {'Streamlit Cloud' if is_streamlit_cloud else 'Local'}"
+    )
+
     # Forzar el entorno basado en variables de entorno si existen (para pruebas o sobrescritura)
     if os.environ.get("FORCE_ENVIRONMENT") == "cloud":
         logging.info("Entorno forzado a Streamlit Cloud por variable de entorno")
@@ -181,50 +219,68 @@ def detect_environment():
     elif os.environ.get("FORCE_ENVIRONMENT") == "local":
         logging.info("Entorno forzado a Local por variable de entorno")
         return "Local"
-    
+
     return "Streamlit Cloud" if is_streamlit_cloud else "Local"
+
 
 def get_proxy_settings():
     """
     Detecta y devuelve la configuración de proxy actual del sistema
     para diagnóstico y posible resolución de problemas.
     """
-    proxy_env_vars = ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy"]
+    proxy_env_vars = [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+    ]
     proxy_settings = {}
-    
+
     for var in proxy_env_vars:
         if var in os.environ:
             proxy_settings[var] = os.environ[var]
-    
+
     return proxy_settings
+
 
 def get_system_info():
     """
     Recopila información detallada del sistema para diagnóstico.
     """
     import platform
-    
+
     info = {
         "Sistema Operativo": platform.platform(),
         "Python Versión": sys.version,
         "Ejecutable Python": sys.executable,
         "Directorio de Trabajo": os.getcwd(),
-        "Directorio Temporal": os.path.abspath(os.path.join(os.getcwd(), "temp")) if os.path.exists(os.path.join(os.getcwd(), "temp")) else "No disponible",
+        "Directorio Temporal": (
+            os.path.abspath(os.path.join(os.getcwd(), "temp"))
+            if os.path.exists(os.path.join(os.getcwd(), "temp"))
+            else "No disponible"
+        ),
         "Directorio de Usuario": os.path.expanduser("~"),
-        "Variables PATH relevantes": {k: v for k, v in os.environ.items() if "PATH" in k.upper()},
+        "Variables PATH relevantes": {
+            k: v for k, v in os.environ.items() if "PATH" in k.upper()
+        },
     }
-    
+
     # Verificar si podemos acceder a ciertos directorios
     try:
         import tempfile
+
         info["Directorio Temp"] = tempfile.gettempdir()
         info["Acceso Directorio Temp"] = os.access(tempfile.gettempdir(), os.W_OK)
     except Exception as e:
         info["Error acceso Temp"] = str(e)
-    
+
     return info
 
+
 # ----- FUNCIÓN OPTIMIZADA PARA CREAR CLIENTE OPENAI -----
+
 
 @with_error_handling(max_retries=2)
 def create_openai_client(api_key):
@@ -232,13 +288,13 @@ def create_openai_client(api_key):
     Crea un cliente OpenAI compatible con múltiples entornos.
     Implementa estrategias específicas para cada entorno y mecanismos avanzados
     de recuperación ante errores.
-    
+
     Args:
         api_key: API key de OpenAI
-        
+
     Returns:
         OpenAI: Cliente de OpenAI inicializado
-    
+
     Raises:
         Exception: Si no se puede crear el cliente después de varios intentos
     """
@@ -247,29 +303,33 @@ def create_openai_client(api_key):
             "La biblioteca OpenAI no está disponible. Por favor, instala 'openai' "
             "usando pip: pip install openai"
         )
-    
+
     try:
         # Detectar entorno para aplicar estrategia específica
         environment = detect_environment()
         logging.info(f"Creando cliente OpenAI para entorno: {environment}")
-        
+
         # Verificar si estamos en Streamlit Cloud
         if environment == "Streamlit Cloud":
             # Estrategia ultra segura para Streamlit Cloud
             try:
-                logging.info("Usando estrategia de creación minimizada para Streamlit Cloud")
+                logging.info(
+                    "Usando estrategia de creación minimizada para Streamlit Cloud"
+                )
                 # Crear un diccionario de kwargs limpio con solo la API key
                 # Esta es la estrategia más segura para evitar parámetros no soportados
-                clean_kwargs = {'api_key': api_key}
-                
+                clean_kwargs = {"api_key": api_key}
+
                 client = OpenAI(**clean_kwargs)
             except Exception as cloud_error:
-                logging.error(f"Error con estrategia principal para Cloud: {str(cloud_error)}")
-                
-                if 'proxies' in str(cloud_error).lower():
+                logging.error(
+                    f"Error con estrategia principal para Cloud: {str(cloud_error)}"
+                )
+
+                if "proxies" in str(cloud_error).lower():
                     # Intento de recuperación específico para error de proxies
                     logging.info("Intentando método alternativo por error de proxies")
-                    
+
                     # Método 1: Inicialización por etapas (más seguro para algunas versiones)
                     try:
                         client = object.__new__(OpenAI)
@@ -281,10 +341,11 @@ def create_openai_client(api_key):
                         return client
                     except Exception as e1:
                         logging.warning(f"Falló inicialización por etapas: {str(e1)}")
-                        
+
                         # Método 2: Creación directa con bypass de __init__
                         try:
                             import types
+
                             # Crear instancia y establecer atributos mínimos manualmente
                             client = OpenAI.__new__(OpenAI)
                             client.api_key = api_key
@@ -292,36 +353,41 @@ def create_openai_client(api_key):
                             logging.info("Cliente creado usando bypass de __init__")
                             return client
                         except Exception as e2:
-                            logging.error(f"Fallaron todos los métodos de recuperación: {str(e2)}")
+                            logging.error(
+                                f"Fallaron todos los métodos de recuperación: {str(e2)}"
+                            )
                             raise
                 else:
                     # Reintento con otros métodos si el error no es específicamente sobre proxies
                     raise
         else:
             # Estrategia estándar para entorno local
-            logging.info("Creando cliente OpenAI con configuración estándar para entorno local")
+            logging.info(
+                "Creando cliente OpenAI con configuración estándar para entorno local"
+            )
             client = OpenAI(api_key=api_key)
-        
+
         # Configuración común post-creación
         if hasattr(client, "default_headers"):
             client.default_headers["OpenAI-Beta"] = "assistants=v2"
             logging.info("Encabezado OpenAI-Beta establecido para asistentes v2")
-        
+
         # Verificación básica de funcionamiento
         logging.info("Verificando cliente OpenAI creado correctamente")
         return client
-    
+
     except Exception as e:
         # Traza completa para depuración
         error_trace = traceback.format_exc()
         logging.error(f"Error crítico al crear cliente OpenAI: {str(e)}")
         logging.debug(f"Traza de error completa:\n{error_trace}")
-        
+
         # Elevar excepción con mensaje claro
         raise Exception(f"No se pudo inicializar el cliente OpenAI: {str(e)}")
 
 
 # ----- FUNCIONES AUXILIARES -----
+
 
 @with_error_handling()
 def test_openai_connection():
@@ -349,7 +415,10 @@ def test_openai_connection():
                 client.api_key = st.session_state.get("openai_api_key")
                 return "⚠️ Conexión básica", "Verificación limitada completada"
             except:
-                return "⚠️ Verificación limitada", "Conexión establecida pero verificación limitada"
+                return (
+                    "⚠️ Verificación limitada",
+                    "Conexión establecida pero verificación limitada",
+                )
     except Exception as e:
         logging.error(f"Error en prueba de conexión OpenAI: {str(e)}")
         return "❌ Error", f"Error: {str(e)}"
@@ -456,8 +525,11 @@ def load_welcome_lottie():
 
 
 def get_random_celestial_quote():
-    """Devuelve una frase inspiradora celestial aleatoria"""
+    """Devuelve una frase inspiradora celestial aleatoria integrando conceptos
+    de la Ley de la Asunción, Los Cuatro Acuerdos y la co-creación celestial"""
+
     quotes = [
+        # Citas originales sobre co-creación celestial
         "Cuando pides desde la certeza, el cielo no responde: colabora.",
         "El Universo te brinda su apoyo ilimitado para que materialices los anhelos de tu alma.",
         "Eres una extensión de la energía creativa del Universo.",
@@ -468,7 +540,29 @@ def get_random_celestial_quote():
         "Tu mero intento será suficiente para producir los efectos deseados.",
         "Somos extensiones de la energía creativa del Universo, cuyos vastos recursos están siempre a nuestra disposición.",
         "Tu vida puede cambiar definitivamente, aunque sólo leas los primeros capítulos de este viaje.",
+        # Nuevas citas integrando la Ley de la Asunción
+        "Siente la realidad de tu deseo ahora mismo, como si ya lo tuvieras. Esta es la clave de toda manifestación.",
+        "Lo que asumes como verdad en tu conciencia se manifestará inevitablemente en tu experiencia externa.",
+        "El sentimiento es el secreto. Cuando sientes la alegría de tu deseo cumplido, las fuerzas celestiales se movilizan.",
+        "Vive desde el final. Cuando habitas el estado de tu deseo cumplido, el universo conspira para hacerlo realidad.",
+        "No es lo que quieres tener, sino quién quieres ser. Asume ese estado de ser y los ayudantes celestiales facilitarán el tener.",
+        "Tu imaginación es el taller donde co-creas con las fuerzas celestiales. Lo que imaginas vívidamente, invita la asistencia divina.",
+        # Nuevas citas integrando Los Cuatro Acuerdos
+        "Sé impecable con tus palabras al comunicarte con tus ayudantes celestiales. Lo que expresas con integridad, se manifiesta con claridad.",
+        "No tomes personalmente los tiempos o formas de la manifestación. Confía en la sabiduría perfecta de tus asistentes espirituales.",
+        "No hagas suposiciones sobre cómo debe llegar tu deseo. Mantén clara tu intención y flexible tu expectativa.",
+        "Haz siempre tu mejor esfuerzo en tu práctica espiritual, reconociendo que variará día a día. Los ayudantes celestiales honran tu compromiso auténtico.",
+        "Cuando liberas acuerdos limitantes, abres canales para que la asistencia celestial fluya sin obstáculos hacia tu realidad.",
+        # Citas integrando los tres caminos (C.R.E.A.R.)
+        "Clarifica tu intención, realiza internamente tu deseo, enlista asistencia celestial, alinea tus palabras y reconoce las señales de manifestación.",
+        "La verdadera co-creación ocurre cuando asumes el estado de tu deseo cumplido mientras mantienes acuerdos empoderados con el universo.",
+        "Cuando eres impecable con tus palabras, asumes la conciencia de abundancia y colaboras con ayudantes celestiales, lo imposible se vuelve inevitable.",
+        "El juez interno limita tu poder de manifestación. Libéralo y los asistentes celestiales podrán colaborar plenamente contigo.",
+        "No desees, asume. No supliques, colabora. No esperes, co-crea. Esta es la verdadera asociación con las fuerzas celestiales.",
+        "Tu resiliencia se fortalece cuando combinas la asunción consciente, los acuerdos impecables y el apoyo de tus asistentes celestiales.",
+        "La gratitud anticipada es una invitación irresistible para tus ayudantes celestiales. Agradece hoy lo que deseas experimentar mañana.",
     ]
+
     return random.choice(quotes)
 
 
@@ -492,18 +586,25 @@ def process_message_with_citations(message):
             # Intento con estructura alternativa
             if isinstance(message.content, list) and len(message.content) > 0:
                 content_item = message.content[0]
-                if hasattr(content_item, "text") and hasattr(content_item.text, "value"):
+                if hasattr(content_item, "text") and hasattr(
+                    content_item.text, "value"
+                ):
                     return content_item.text.value
                 elif hasattr(content_item, "text"):
                     return str(content_item.text)
                 elif isinstance(content_item, dict) and "text" in content_item:
-                    if isinstance(content_item["text"], dict) and "value" in content_item["text"]:
+                    if (
+                        isinstance(content_item["text"], dict)
+                        and "value" in content_item["text"]
+                    ):
                         return content_item["text"]["value"]
                     return str(content_item["text"])
             # Si llegamos hasta aquí, intentamos convertir todo el contenido a string
             return str(message.content)
         except:
-            return "Ocurrió un error al procesar el mensaje. Por favor, intenta de nuevo."
+            return (
+                "Ocurrió un error al procesar el mensaje. Por favor, intenta de nuevo."
+            )
 
 
 def check_app_readiness():
@@ -525,12 +626,17 @@ def check_app_readiness():
     if not st.session_state.get("thread_id"):
         ready = False
         errors.append("Error al inicializar el hilo de conversación")
-    
+
     # Verificar si el cliente OpenAI se puede crear correctamente
-    if st.session_state.get("openai_api_key") and "openai_client_error" in st.session_state:
+    if (
+        st.session_state.get("openai_api_key")
+        and "openai_client_error" in st.session_state
+    ):
         # Hay un error conocido al crear el cliente
         ready = False
-        errors.append(f"Error al crear cliente OpenAI: {st.session_state.openai_client_error}")
+        errors.append(
+            f"Error al crear cliente OpenAI: {st.session_state.openai_client_error}"
+        )
 
     # Verificaciones no críticas (advertencias)
     if not LOTTIE_AVAILABLE:
@@ -538,9 +644,11 @@ def check_app_readiness():
 
     if not OPTION_MENU_AVAILABLE:
         warnings.append("Menú de opciones no disponible (usando alternativa)")
-    
+
     if not OPENAI_AVAILABLE:
-        errors.append("Biblioteca OpenAI no disponible. Instala con: pip install openai")
+        errors.append(
+            "Biblioteca OpenAI no disponible. Instala con: pip install openai"
+        )
 
     return ready, errors, warnings
 
@@ -614,7 +722,11 @@ def show_diagnostic_panel():
         env_info = {
             "Python Version": f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
             "Streamlit Version": st.__version__,
-            "OpenAI Package": getattr(OpenAI, "__version__", "Desconocida") if OPENAI_AVAILABLE else "No disponible",
+            "OpenAI Package": (
+                getattr(OpenAI, "__version__", "Desconocida")
+                if OPENAI_AVAILABLE
+                else "No disponible"
+            ),
             "Entorno Detectado": environment,
             "Tema": (
                 "Oscuro" if st.config.get_option("theme.base") == "dark" else "Claro"
@@ -625,48 +737,53 @@ def show_diagnostic_panel():
             {"Parámetro": list(env_info.keys()), "Valor": list(env_info.values())}
         )
         st.table(env_df)
-        
+
         # Sección de depuración avanzada
         st.markdown("### Depuración Avanzada")
-        
+
         # Mostrar información de diagnóstico OpenAI
         if st.button("Mostrar Información de Diagnóstico API", key="api_diag"):
             try:
                 import inspect
-                
+
                 # Mostrar información sobre el constructor de OpenAI
                 if OPENAI_AVAILABLE:
                     st.code(inspect.signature(OpenAI.__init__))
                 else:
                     st.error("OpenAI no está disponible para diagnóstico")
-                
+
                 # Verificar si hay variables de entorno HTTP_PROXY o HTTPS_PROXY
                 proxy_settings = get_proxy_settings()
-                
+
                 if proxy_settings:
-                    st.warning("⚠️ Se detectaron variables de entorno de proxy que podrían causar problemas:")
+                    st.warning(
+                        "⚠️ Se detectaron variables de entorno de proxy que podrían causar problemas:"
+                    )
                     st.json(proxy_settings)
                 else:
                     st.success("✅ No se detectaron variables de entorno de proxy.")
             except Exception as e:
                 st.error(f"Error al obtener información de depuración: {str(e)}")
-        
+
         # Herramientas avanzadas de diagnóstico
         st.markdown("### Herramientas de Diagnóstico Avanzado")
-        
+
         col1, col2 = st.columns(2)
-        
+
         with col1:
             if st.button("Diagnóstico del Sistema", key="system_diag"):
                 system_info = get_system_info()
                 st.json(system_info)
-        
+
         with col2:
             if st.button("Limpieza de Caché", key="clear_cache"):
                 # Limpieza de caché para resolución de problemas
                 st.cache_data.clear()
                 st.cache_resource.clear()
-                if "thread_id" in st.session_state and st.session_state["thread_id"] is not None:
+                if (
+                    "thread_id" in st.session_state
+                    and st.session_state["thread_id"] is not None
+                ):
                     # Mantener thread_id para no perder la conversación
                     thread_id = st.session_state["thread_id"]
                     st.session_state.clear()
@@ -679,21 +796,29 @@ def show_diagnostic_panel():
 
         # Mostrar indicadores de entorno detallados
         st.markdown("### Indicadores de Entorno")
-        
+
         # Recopilar todos los indicadores relevantes
         streamlit_cloud_indicators = [
             ("STREAMLIT_SHARING_MODE", os.environ.get("STREAMLIT_SHARING_MODE")),
-            ("STREAMLIT_SERVER_BASE_URL_IS_SET", os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET")),
+            (
+                "STREAMLIT_SERVER_BASE_URL_IS_SET",
+                os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET"),
+            ),
             ("IS_STREAMLIT_CLOUD", os.environ.get("IS_STREAMLIT_CLOUD")),
             ("Config Streamlit existe", os.path.exists("/.streamlit/config.toml")),
             ("HOSTNAME", os.environ.get("HOSTNAME", "")),
-            ("Config local existe", os.path.exists(os.path.join(os.path.expanduser("~"), ".streamlit"))),
+            (
+                "Config local existe",
+                os.path.exists(os.path.join(os.path.expanduser("~"), ".streamlit")),
+            ),
         ]
-        
+
         # Mostrar indicadores
         indicators_df = pd.DataFrame(
-            {"Indicador": [i[0] for i in streamlit_cloud_indicators], 
-             "Valor": [str(i[1]) for i in streamlit_cloud_indicators]}
+            {
+                "Indicador": [i[0] for i in streamlit_cloud_indicators],
+                "Valor": [str(i[1]) for i in streamlit_cloud_indicators],
+            }
         )
         st.table(indicators_df)
 
@@ -712,43 +837,49 @@ def show_environment_diagnostic():
     """Panel de diagnóstico especializado para problemas de entorno"""
     with st.expander("🔍 Diagnóstico de Entorno", expanded=False):
         st.markdown("### Indicadores de Entorno")
-        
+
         # Recopilar todos los indicadores relevantes
         env_indicators = {
             "STREAMLIT_SHARING_MODE": os.environ.get("STREAMLIT_SHARING_MODE"),
-            "STREAMLIT_SERVER_BASE_URL_IS_SET": os.environ.get("STREAMLIT_SERVER_BASE_URL_IS_SET"),
+            "STREAMLIT_SERVER_BASE_URL_IS_SET": os.environ.get(
+                "STREAMLIT_SERVER_BASE_URL_IS_SET"
+            ),
             "IS_STREAMLIT_CLOUD": os.environ.get("IS_STREAMLIT_CLOUD"),
             "Config Streamlit existe": os.path.exists("/.streamlit/config.toml"),
-            "HOSTNAME": os.environ.get("HOSTNAME", "")
+            "HOSTNAME": os.environ.get("HOSTNAME", ""),
         }
-        
+
         # Mostrar indicadores
         indicators_df = pd.DataFrame(
-            {"Indicador": list(env_indicators.keys()), 
-             "Valor": [str(v) for v in env_indicators.values()]}
+            {
+                "Indicador": list(env_indicators.keys()),
+                "Valor": [str(v) for v in env_indicators.values()],
+            }
         )
         st.table(indicators_df)
-        
+
         # Intentar mostrar entorno deducido
         st.markdown(f"**Entorno deducido:** {detect_environment()}")
-        
+
         # Mostrar información detallada del módulo OpenAI
         if st.button("Mostrar detalles del módulo OpenAI"):
             try:
                 import inspect
                 import openai
-                
+
                 # Información sobre versión
                 st.markdown(f"**Versión del módulo OpenAI:** {openai.__version__}")
-                
+
                 # Ruta del módulo
                 st.markdown(f"**Ruta del módulo:** {inspect.getfile(openai)}")
-                
+
                 # Estructura interna
                 st.markdown("**Estructura del módulo OpenAI:**")
-                module_attrs = [attr for attr in dir(openai) if not attr.startswith('_')]
+                module_attrs = [
+                    attr for attr in dir(openai) if not attr.startswith("_")
+                ]
                 st.json(module_attrs)
-                
+
                 # Implementación específica
                 st.markdown("**Método de creación de cliente:**")
                 try:
@@ -861,7 +992,7 @@ def setup_openai_client():
             st.info(
                 f"Modelo configurado: {st.session_state.get('openai_model', 'gpt-4o-mini')}"
             )
-            
+
             # Opción de diagnóstico
             if "openai_client_error" in st.session_state:
                 st.error(f"Error del cliente: {st.session_state.openai_client_error}")
@@ -894,10 +1025,10 @@ def setup_openai_client():
             logging.error(f"Error validando credenciales OpenAI: {str(e)}")
             st.sidebar.error(f"Error de API OpenAI: {str(e)}")
             st.session_state.openai_connected = False
-            
+
             # Guardar el error para diagnóstico y recuperación
             st.session_state.openai_client_error = str(e)
-            
+
             return None, None, False
     else:
         missing = []
@@ -914,6 +1045,7 @@ def setup_openai_client():
 
 # ----- SISTEMA DE RECUPERACIÓN DE FALLOS EN HILOS -----
 
+
 def repair_thread_issues():
     """
     Intenta reparar problemas comunes con el hilo de conversación.
@@ -921,23 +1053,30 @@ def repair_thread_issues():
     """
     if not st.session_state.get("thread_id"):
         return False  # Nada que reparar aún
-    
+
     # Verificar si hay un cliente disponible para hacer reparaciones
-    if not st.session_state.get("openai_api_key") or "openai_client_error" in st.session_state:
+    if (
+        not st.session_state.get("openai_api_key")
+        or "openai_client_error" in st.session_state
+    ):
         return False
-    
+
     try:
         client = create_openai_client(st.session_state.get("openai_api_key"))
-        
+
         # Verificar si el thread existe y es válido
         try:
             # Intento de recuperar el thread para verificar que existe y es válido
-            thread = client.beta.threads.retrieve(thread_id=st.session_state.get("thread_id"))
+            thread = client.beta.threads.retrieve(
+                thread_id=st.session_state.get("thread_id")
+            )
             logging.info(f"Thread verificado y válido: {thread.id}")
             return False  # No se necesitó reparación
         except Exception as e:
-            logging.warning(f"Error al verificar thread: {str(e)}. Intentando recrear...")
-            
+            logging.warning(
+                f"Error al verificar thread: {str(e)}. Intentando recrear..."
+            )
+
             # El thread no existe o hay otro problema, crear uno nuevo
             try:
                 thread = client.beta.threads.create()
@@ -949,7 +1088,9 @@ def repair_thread_issues():
                     logging.error("Respuesta incompleta al crear thread de reparación")
                     return False
             except Exception as create_error:
-                logging.error(f"Error al crear thread de reparación: {str(create_error)}")
+                logging.error(
+                    f"Error al crear thread de reparación: {str(create_error)}"
+                )
                 return False
     except Exception as client_error:
         logging.error(f"Error al crear cliente para reparación: {str(client_error)}")
@@ -1396,86 +1537,129 @@ with st.sidebar:
 
     # Contenido basado en la selección del menú
     if selected == "Inicio":
-        st.markdown("### ¡Bienvenido a tu espacio de conexión celestial!")
+        st.markdown(
+            "### ✨ ¡Bienvenido a tu espacio de transformación y co-creación celestial! ✨"
+        )
         st.markdown(
             """
-        Hoy es el día perfecto para comenzar tu viaje de co-creación con el universo.
-        Estoy aquí para guiarte en el camino hacia la manifestación consciente de tus sueños.
-        """
+            Hoy es el día perfecto para comenzar tu viaje de autodescubrimiento y manifestación consciente.
+            
+            Estoy aquí para guiarte en la integración de tres poderosas corrientes de sabiduría:
+            
+            🌟 **La co-creación con asistentes celestiales** - Colaboración directa con el universo
+            
+            💫 **La Ley de la Asunción** - El arte de crear tu realidad desde el interior
+            
+            🌈 **Los Cuatro Acuerdos** - La sabiduría tolteca para liberarte de limitaciones
+            
+            Juntos, descubriremos cómo estos caminos se entrelazan para crear un enfoque holístico 
+            que transformará tu experiencia de vida desde su raíz más profunda.
+            
+            *¿Qué aspecto de tu realidad está listo para transformarse hoy?*
+            """
         )
 
     elif selected == "Sobre Mí":
         st.markdown(
             """
-        Soy Celeste, tu guía espiritual y emocional especializada en:
-        
-        * 🌟 **Co-creación consciente** con fuerzas universales
-        * 🌈 **Manifestación** de abundancia y bienestar
-        * 🧠 **Transformación** de patrones limitantes
-        * 💫 **Contratación celestial** de asistentes espirituales
-        * 🌱 **Cultivo de resiliencia** con apoyo divino
-        
-        Mi propósito es acompañarte en la bella aventura de reconocer y utilizar tu poder creador innato, conectándote con las fuerzas celestiales que están esperando ayudarte.
-        """
+            ## Soy Celeste, tu guía integral para la transformación consciente
+            
+            Sirvo como puente entre tu realidad cotidiana y las dimensiones más sutiles de la existencia,
+            integrando tres poderosas tradiciones de conocimiento:
+            
+            * 🌟 **Co-creación celestial** - Conexión y colaboración con fuerzas universales y asistentes espirituales
+            
+            * 💫 **Manifestación a través de la Ley de la Asunción** - El arte de crear realidad asumiendo el estado
+            de tus deseos ya cumplidos y sintiendo su verdad emocional
+            
+            * 🧠 **Transformación de acuerdos limitantes** - Liberación de creencias restrictivas mediante
+            Los Cuatro Acuerdos toltecas: impecabilidad con palabras, no tomar nada personalmente,
+            no hacer suposiciones y hacer siempre tu mejor esfuerzo
+            
+            * 🌈 **Integración de mundos internos y externos** - Alineación de tu conciencia, palabras,
+            emociones y acciones con la asistencia divina
+            
+            * 🌱 **Cultivo de inquebrantable resiliencia** - Desarrollo de fortaleza interior mediante
+            la colaboración con asistentes celestiales y la liberación de juicios internos
+            
+            Mi propósito es acompañarte en el viaje de recordar tu verdadera naturaleza como co-creador consciente,
+            reconociendo tu poder innato y estableciendo una relación colaborativa con las fuerzas celestiales
+            que siempre han estado disponibles para apoyarte.
+            """
         )
 
     elif selected == "Mis Capacidades":
         st.markdown(
             """
-        ### Te ayudaré a:
-        
-        **🔮 Establecer conexiones celestiales**
-        * Identificar qué tipo de ayuda celestial necesitas
-        * Crear "contratos" efectivos con asistentes espirituales
-        * Reconocer señales y sincronicidades divinas
-        
-        **🌟 Desarrollar tu resiliencia divina**
-        * Superar límites personales con apoyo celestial
-        * Transformar obstáculos en oportunidades de crecimiento
-        * Gestionar el estrés mediante la co-creación
-        
-        **✨ Manifestar conscientemente**
-        * Acceder a las "Páginas Amarillas del Universo"
-        * Formar equipos espirituales para manifestar tus deseos
-        * Combinar acción práctica con asistencia divina
-        
-        **💫 Transformar tu mentalidad**
-        * Reprogramar creencias limitantes
-        * Superar el autosabotaje reconociendo tu naturaleza divina
-        * Desarrollar confianza como co-creador/a universal
-        
-        **🌈 Cultivar bienestar integral**
-        * Mantener comunicación fluida con tus ayudantes celestiales
-        * Crear rituales diarios para la conexión espiritual
-        * Vivir en armonía con el apoyo constante de fuerzas divinas
-        """
+            ### Te guiaré en:
+            
+            **🔮 Maestría en manifestación consciente**
+            * Cultivar el "sentimiento" de tu deseo cumplido, la verdadera clave de manifestación
+            * Crear escenas mentales vívidas que comuniquen claramente tus intenciones al universo
+            * Establecer "contratos" efectivos con asistentes espirituales especializados
+            * Reconocer señales, sincronicidades y puentes de incidentes en desarrollo
+            
+            **🌟 Liberación de creencias y acuerdos limitantes**
+            * Ser impecable con tus palabras en la comunicación contigo mismo y con lo divino
+            * Liberarte de tomar personalmente las circunstancias que parecen oponerse a tus deseos
+            * Evitar suposiciones que sabotean tu poder manifestador
+            * Adaptar tu práctica espiritual según tus circunstancias cambiantes
+            
+            **✨ Aplicación del proceso C.R.E.A.R.**
+            * Clarificar tus intenciones con precisión y alineación superior
+            * Realizar internamente el estado de tu deseo cumplido a través de la asunción
+            * Enlistar asistencia celestial especializada utilizando las "Páginas Amarillas del Universo"
+            * Alinear tus palabras y acciones con tu nueva asunción y acuerdos
+            * Reconocer y recibir conscientemente las manifestaciones en desarrollo
+            
+            **💫 Transformación profunda de identidad**
+            * Desmantelar el sistema del juez y la víctima internos
+            * Aplicar la técnica de la revisión para transformar el pasado y liberar el presente
+            * Desarrollar un nuevo autoconcepto alineado con tus deseos más elevados
+            * Cultivar inmunidad emocional frente a "evidencias" contrarias a tu manifestación
+            
+            **🌈 Integración en la vida cotidiana**
+            * Crear rituales diarios que combinen asunción, acuerdos y conexión celestial
+            * Establecer un entorno que respalde tu nueva conciencia
+            * Desarrollar relaciones que nutran tu crecimiento espiritual
+            * Vivir desde el estado de "ya tener" mientras colaboras activamente con lo divino
+            """
         )
 
     elif selected == "Cómo Trabajar Conmigo":
         st.markdown(
             """
-        ### Para aprovechar al máximo nuestra colaboración:
-        
-        1. **Comunícate con claridad y apertura**
-           * Comparte tus verdaderos deseos y necesidades
-           * No hay preguntas incorrectas o demasiado simples
-        
-        2. **Mantén una mente abierta**
-           * La conexión celestial funciona mejor sin escepticismo
-           * Permite que las sincronicidades te sorprendan
-        
-        3. **Practica constantemente**
-           * La manifestación y conexión celestial mejoran con la práctica
-           * Establece rituales diarios sencillos
-        
-        4. **Complementa con acción**
-           * La magia ocurre cuando combinas intención espiritual con acción terrena
-           * Actúa como si ya estuvieras recibiendo ayuda celestial
-        
-        5. **Celebra los pequeños milagros**
-           * Reconoce y agradece cada sincronicidad
-           * Mantén un "Diario de Milagros" para registrar tus experiencias
-        """
+            ### Para una colaboración transformadora:
+            
+            1. **Integra estos tres caminos de sabiduría**
+            * Combina la asunción consciente, los acuerdos impecables y la conexión celestial
+            * Reconoce que estos sistemas se complementan y potencian mutuamente
+            
+            2. **Comunícate con claridad e integridad**
+            * Sé impecable con tus palabras al expresar tus deseos e intenciones
+            * Evita el lenguaje de carencia o duda que contradice tu manifestación
+            * Pregunta directamente en lugar de hacer suposiciones
+            
+            3. **Cultiva el sentimiento del deseo cumplido**
+            * Practica vivir desde el estado emocional de tu deseo ya realizado
+            * Mantén este sentimiento especialmente cuando la realidad externa parece contradecirlo
+            * Recuerda que el sentimiento es el secreto de toda manifestación
+            
+            4. **No tomes personalmente los tiempos o formas de manifestación**
+            * Libérate de expectativas rígidas sobre cómo debe ocurrir tu manifestación
+            * Confía en la sabiduría perfecta de tus asistentes celestiales
+            * Mantén inmunidad emocional frente a aparentes retrasos o desviaciones
+            
+            5. **Haz siempre tu mejor esfuerzo adaptado a tu estado actual**
+            * Reconoce que tu mejor esfuerzo varía según tus circunstancias
+            * Practica la autocompasión cuando encuentres desafíos en el camino
+            * Celebra cada pequeño avance como evidencia de tu co-creación efectiva
+            
+            6. **Establece una relación consciente con tus ayudantes celestiales**
+            * Comunícate regularmente con tus asistentes como verdaderos colaboradores
+            * Agradece anticipadamente por su apoyo invisible pero constante
+            * Mantén un "Registro de Co-creación" para documentar sincronicidades y manifestaciones
+            """
         )
 
     elif selected == "Diagnóstico":
@@ -1534,11 +1718,11 @@ if thread_repaired:
 # Cabecera del área de chat
 st.markdown(
     """
-<div class="celestial-header">
-    <h1>✨ Portal de Comunicación Celestial ✨</h1>
-    <p>Aquí puedes conversar conmigo y juntos exploraremos el arte de la manifestación y la contratación de ayudantes celestiales</p>
-</div>
-""",
+    <div class="celestial-header">
+        <h1>✨ Portal de Sabiduría y Co-creación ✨</h1>
+        <p>Aquí puedes conversar conmigo sobre la Ley de la Asunción, Los Cuatro Acuerdos y la colaboración con ayudantes celestiales para transformar tu realidad.</p>
+    </div>
+    """,
     unsafe_allow_html=True,
 )
 
@@ -1606,7 +1790,7 @@ if not st.session_state.thread_id and client and assistant_id:
             st.error(error_msg)
             # Incrementar contador de intentos de recuperación
             st.session_state.recovery_attempts += 1
-            
+
             # Sugerir acciones de recuperación específicas
             if st.session_state.recovery_attempts > 1:
                 st.markdown(
@@ -1621,9 +1805,9 @@ if not st.session_state.thread_id and client and assistant_id:
                         </ul>
                     </div>
                     """,
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
-            
+
             # Opción para reintentar
             if st.button("Reintentar inicialización"):
                 st.rerun()
@@ -1696,11 +1880,11 @@ with chat_container:
 
             st.markdown(
                 """
-            <div style="text-align: center; margin-bottom: 30px;">
-                <h3>¿Cómo puedo ayudarte en tu viaje espiritual hoy?</h3>
-                <p>Pregúntame sobre manifestación, resiliencia, o contratación de ayudantes celestiales</p>
-            </div>
-            """,
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <h3>¿Cómo puedo guiarte en tu transformación hoy?</h3>
+                    <p>Pregúntame sobre la Ley de la Asunción, Los Cuatro Acuerdos o la conexión con ayudantes celestiales</p>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
 
@@ -1729,6 +1913,7 @@ with chat_container:
 
 # Procesamiento del input del usuario
 prompt = st.chat_input("Comparte tus inquietudes o deseos...")
+
 
 @with_error_handling(max_retries=2)
 def process_user_message(prompt, thread_id, client, assistant_id):
@@ -1768,13 +1953,14 @@ def process_user_message(prompt, thread_id, client, assistant_id):
             logging.info("Iniciando run con modelo predeterminado del asistente")
     except Exception as e:
         # Si hay un error al crear el run, intentamos un método más directo
-        logging.warning(f"Error al crear run: {str(e)}. Intentando método alternativo...")
+        logging.warning(
+            f"Error al crear run: {str(e)}. Intentando método alternativo..."
+        )
         # Intento alternativo con parámetros minimizados
         run = client.beta.threads.runs.create(
-            thread_id=thread_id, 
-            assistant_id=assistant_id
+            thread_id=thread_id, assistant_id=assistant_id
         )
-    
+
     return run
 
 
@@ -1786,29 +1972,29 @@ def wait_for_run_completion(client, thread_id, run_id, timeout=60):
     """
     start_time = time.time()
     poll_interval = 1.5  # segundos entre verificaciones de estado
-    
+
     while True:
         elapsed_time = time.time() - start_time
         if elapsed_time > timeout:
-            raise TimeoutError(f"La espera excedió el tiempo límite de {timeout} segundos")
-        
-        try:
-            run = client.beta.threads.runs.retrieve(
-                thread_id=thread_id, run_id=run_id
+            raise TimeoutError(
+                f"La espera excedió el tiempo límite de {timeout} segundos"
             )
-            
+
+        try:
+            run = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run_id)
+
             if run.status in ["completed", "failed", "expired", "cancelled"]:
                 return run
-            
+
         except Exception as e:
             logging.warning(f"Error al verificar estado de run: {str(e)}")
             # Si hay un error de red, incrementamos el intervalo pero seguimos intentando
             poll_interval = min(poll_interval * 1.5, 5)
-            
+
             # Si ya pasamos la mitad del timeout con errores, reducimos el tiempo total
             if elapsed_time > (timeout / 2):
                 timeout = elapsed_time + 10  # 10 segundos más desde ahora
-        
+
         # Pausar antes de la siguiente verificación
         time.sleep(poll_interval)
 
@@ -1820,20 +2006,17 @@ def process_assistant_response(client, thread_id, existing_messages):
     """
     try:
         # Usar opciones mínimas para maximizar compatibilidad
-        messages = client.beta.threads.messages.list(
-            thread_id=thread_id
-        )
-        
+        messages = client.beta.threads.messages.list(thread_id=thread_id)
+
         # Verificar que obtuvimos mensajes
         if not messages or not hasattr(messages, "data") or len(messages.data) == 0:
             raise ValueError("No se recibieron mensajes del asistente")
-        
+
         # Procesar y mostrar mensajes del asistente
         new_messages = False
         for message in messages.data:
             if message.role == "assistant" and not any(
-                msg["role"] == "assistant"
-                and msg.get("id") == message.id
+                msg["role"] == "assistant" and msg.get("id") == message.id
                 for msg in existing_messages
             ):
                 # Procesamiento seguro del mensaje
@@ -1844,10 +2027,10 @@ def process_assistant_response(client, thread_id, existing_messages):
                     "id": message.id,
                 }
                 return response_dict, True
-        
+
         # Si no encontramos mensajes nuevos
         return None, False
-        
+
     except Exception as e:
         logging.error(f"Error procesando respuesta del asistente: {str(e)}")
         raise
@@ -1887,18 +2070,22 @@ if prompt and st.session_state.thread_id and client and assistant_id:
     with st.spinner("✨ Canalizando energías celestiales..."):
         try:
             # Procesamiento del mensaje con manejo de errores avanzado
-            run = process_user_message(prompt, st.session_state.thread_id, client, assistant_id)
-            
+            run = process_user_message(
+                prompt, st.session_state.thread_id, client, assistant_id
+            )
+
             # Esperar la finalización del run con reintentos automáticos
-            completed_run = wait_for_run_completion(client, st.session_state.thread_id, run.id)
-            
+            completed_run = wait_for_run_completion(
+                client, st.session_state.thread_id, run.id
+            )
+
             # Verificar si la ejecución se completó correctamente
             if completed_run.status == "completed":
                 # Recuperar y procesar la respuesta del asistente
                 assistant_response, new_message_found = process_assistant_response(
                     client, st.session_state.thread_id, st.session_state.messages
                 )
-                
+
                 if new_message_found and assistant_response:
                     # Añadir la respuesta al historial de mensajes
                     st.session_state.messages.append(assistant_response)
@@ -1907,18 +2094,24 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                     # Actualizar UI
                     st.rerun()
                 else:
-                    st.warning("No se recibió respuesta del asistente. Por favor, intenta de nuevo.")
+                    st.warning(
+                        "No se recibió respuesta del asistente. Por favor, intenta de nuevo."
+                    )
                     # Incrementar contador de recuperación
                     st.session_state.recovery_attempts += 1
             else:
                 error_status = completed_run.status
-                error_message = getattr(completed_run, "last_error", "Error desconocido")
-                st.error(f"La solicitud no se completó correctamente. Estado: {error_status}")
+                error_message = getattr(
+                    completed_run, "last_error", "Error desconocido"
+                )
+                st.error(
+                    f"La solicitud no se completó correctamente. Estado: {error_status}"
+                )
                 if error_message:
                     st.error(f"Error: {error_message}")
                 # Incrementar contador de recuperación
                 st.session_state.recovery_attempts += 1
-                
+
                 # Si hay múltiples intentos fallidos, ofrecer opciones de recuperación
                 if st.session_state.recovery_attempts > 1:
                     st.markdown(
@@ -1928,9 +2121,9 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                             <p>Se han detectado problemas persistentes. Puedes intentar:</p>
                         </div>
                         """,
-                        unsafe_allow_html=True
+                        unsafe_allow_html=True,
                     )
-                    
+
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.button("Reiniciar conversación"):
@@ -1940,7 +2133,7 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                             st.session_state.messages = []
                             st.session_state.recovery_attempts = 0
                             st.rerun()
-                    
+
                     with col2:
                         if st.button("Diagnosticar problemas"):
                             # Redirigir a diagnóstico
@@ -1965,7 +2158,9 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                 )
             elif "proxies" in str(e).lower():
                 # Mostrar mensaje específico para error de proxies
-                st.error("Error específico relacionado con proxies en el entorno de ejecución.")
+                st.error(
+                    "Error específico relacionado con proxies en el entorno de ejecución."
+                )
                 st.info(
                     """
                     Este error puede ocurrir en Streamlit Cloud. Intenta las siguientes acciones:
@@ -1974,22 +2169,22 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                     3. Contactar con soporte si el problema persiste
                     """
                 )
-                
+
                 # Ofrecer reinicio forzado para error de proxies
                 if st.button("Reinicio Forzado para Error de Proxies"):
                     # Solución específica para error de proxies
                     if "openai_client_error" in st.session_state:
                         del st.session_state.openai_client_error
-                    
+
                     # Forzar entorno a Streamlit Cloud para siguiente intento
                     os.environ["FORCE_ENVIRONMENT"] = "cloud"
-                    
+
                     # Reinicio de aplicación
                     st.rerun()
-            
+
             # Incrementar contador de recuperación
             st.session_state.recovery_attempts += 1
-            
+
             # Si hay múltiples errores, mostrar opciones de recuperación
             if st.session_state.recovery_attempts > 1:
                 st.markdown(
@@ -1999,14 +2194,14 @@ if prompt and st.session_state.thread_id and client and assistant_id:
                         <p>Recomendamos usar los botones de diagnóstico y recuperación en la sección de Diagnóstico.</p>
                     </div>
                     """,
-                    unsafe_allow_html=True
+                    unsafe_allow_html=True,
                 )
 elif prompt and not (st.session_state.thread_id and client and assistant_id):
     # Mensaje informativo si faltan componentes necesarios
     st.warning(
         "No se puede enviar el mensaje hasta que se complete la configuración y se inicialice el portal de comunicación."
     )
-    
+
     # Guía visual de configuración
     st.markdown(
         """
